@@ -169,18 +169,28 @@ class AgentTests(unittest.TestCase):
         self.assertEqual([item["id"] for item in AGENT.search_index(index, "ALPHA alice", 20)], ["1"])
         self.assertEqual([item["id"] for item in AGENT.search_index(index, "alpha", 1)], ["1"])
 
-    def test_sync_and_lock_wipe_the_metadata_index(self) -> None:
+    def test_sync_refreshes_the_index_before_returning_and_lock_wipes_it(self) -> None:
         self.agent.session = "session"
         self.agent.search("")
         self.assertTrue(self.agent._index_ready)
         self.agent.sync()
-        self.assertFalse(self.agent._index_ready)
+        self.assertTrue(self.agent._index_ready)
         self.agent.search("")
         commands = [json.loads(line) for line in self.bw_log.read_text(encoding="utf-8").splitlines()]
         self.assertEqual(sum(command[:2] == ["list", "items"] for command in commands), 2)
         self.agent.lock()
         self.assertFalse(self.agent._index_ready)
         self.assertEqual(self.agent._item_index, [])
+
+    def test_failed_sync_warmup_is_retried_by_the_next_search(self) -> None:
+        self.agent.session = "session"
+        with mock.patch.dict(os.environ, {"FAKE_BW_FAIL_LIST": "1"}):
+            response = self.agent.sync()
+        self.assertTrue(response["ok"])
+        self.assertFalse(response["indexReady"])
+        self.assertFalse(self.agent._index_ready)
+        self.agent.search("")
+        self.assertTrue(self.agent._index_ready)
 
     def test_projection_setting_change_rebuilds_index_without_exposing_usernames(self) -> None:
         request_config = {
@@ -688,12 +698,21 @@ class AgentTests(unittest.TestCase):
             self.agent.unlock_with_password(password)
         self.assertEqual(password, bytearray(len(password)))
 
-    def test_status_cache_coalesces_monitor_polls_and_invalidates_on_lock(self) -> None:
+    def test_unlocked_status_cache_survives_poll_interval_and_invalidates_on_lock(self) -> None:
+        self.agent.session = "session"
         self.agent.status()
+        self.agent._status_cached_at -= AGENT.STATUS_CACHE_SECONDS + 1
         self.agent.status()
         commands = [json.loads(line) for line in self.bw_log.read_text(encoding="utf-8").splitlines()]
         self.assertEqual(sum(command[:1] == ["status"] for command in commands), 1)
         self.agent.lock()
+        self.agent.status()
+        commands = [json.loads(line) for line in self.bw_log.read_text(encoding="utf-8").splitlines()]
+        self.assertEqual(sum(command[:1] == ["status"] for command in commands), 2)
+
+    def test_locked_status_cache_expires_normally(self) -> None:
+        self.agent.status()
+        self.agent._status_cached_at -= AGENT.STATUS_CACHE_SECONDS + 1
         self.agent.status()
         commands = [json.loads(line) for line in self.bw_log.read_text(encoding="utf-8").splitlines()]
         self.assertEqual(sum(command[:1] == ["status"] for command in commands), 2)
@@ -781,6 +800,21 @@ class AgentTests(unittest.TestCase):
             self.agent.unlock()
         commands = [json.loads(line) for line in self.bw_log.read_text(encoding="utf-8").splitlines()]
         self.assertFalse(any(command[:1] == ["sync"] for command in commands))
+
+    def test_unlock_without_sync_warms_only_after_secret_inputs_are_cleared(self) -> None:
+        self.agent.config.sync_on_unlock = False
+        password = bytearray(b"correct horse battery staple")
+        original_load = self.agent._load_index
+
+        def checked_load() -> None:
+            self.assertEqual(password, bytearray(len(password)))
+            self.assertEqual(list(self.directory.glob("omawarden-password-*")), [])
+            original_load()
+
+        with mock.patch.object(self.agent, "_load_index", side_effect=checked_load):
+            response = self.agent.unlock_with_password(password)
+        self.assertTrue(response["indexReady"])
+        self.assertTrue(self.agent._index_ready)
 
     def test_sign_in_terminal_applies_the_configured_server_first(self) -> None:
         args = AGENT.build_parser().parse_args([

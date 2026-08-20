@@ -180,8 +180,9 @@ from malware already running as your user.
   under Settings → Advanced.
 - **The sign-in terminal says you're already signed in** — close it and
   choose *Unlock vault*.
-- **Nothing happens right after unlock** — the first search builds the
-  index; large vaults take a second or two.
+- **Unlock takes a moment on a large vault** — OmaWarden prepares its
+  memory-only search index before the background sync reports that it is done.
+  Once ready, opening and searching do not rerun that cold load.
 - **The helper won't start** — `python3 omawarden-agent.py request` prints
   the reason.
 

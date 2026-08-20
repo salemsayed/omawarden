@@ -50,15 +50,23 @@ promise a physical overwrite — that is the trade-off this prompt makes.
 The Bitwarden CLI decrypts full items. The helper immediately reduces them to
 item ID, name, username, the first safe web URL, favourite flag, type and
 password/TOTP capability flags, keeps only login items, and discards the
-rest. That metadata is indexed in memory for the life of the session and
-wiped on lock, sign-out, profile change, privacy change and exit. It is never
-written to disk.
+rest. Unlock and sync prepare that index before their background work reports
+ready; when sync is disabled, preparation starts only after the unlock password
+and its FIFO have been cleared. The metadata stays in memory for the life of
+the session and is wiped on lock, sign-out, profile change, privacy change and
+exit. It is never written to disk.
 
 ### Recently used
 
 The helper remembers the IDs of the last five entries copied or opened, in
 memory only. They survive a lock and are forgotten on sign-out, CLI or
 profile change, and exit.
+
+While the agent owns an unlocked session, routine status polls reuse its
+metadata-only status response instead of repeatedly launching the Bitwarden
+CLI. Lock, sign-out, profile changes, failed status checks and inactivity
+locking clear that response together with the session capability, so this
+cache cannot keep an otherwise closed vault accessible.
 
 ### Screen lock
 

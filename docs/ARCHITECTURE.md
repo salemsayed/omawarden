@@ -33,7 +33,8 @@ request, and parses allowlisted responses. Separate status, search, and
 action processes keep the bar responsive while preventing duplicate actions.
 Search input uses a short debounce and coalesces in-flight requests without
 presenting stale results. After a successful unlock it triggers the sync
-itself so cached results appear immediately. It also observes Omarchy's
+itself; that background action prepares the metadata index before reporting
+completion, so the first panel search is warm. It also observes Omarchy's
 native lock service and reliably queues a vault lock when the screen locks.
 
 `UnlockPrompt.qml` is the native unlock overlay, privately owned by the bar
@@ -48,18 +49,22 @@ mode starts or connects to a long-lived per-user agent; `unlock-stdin` does
 the same for one native-prompt password. The agent holds the session key,
 executes Bitwarden operations, projects item metadata (login items only),
 ranks searches, tracks recently used item IDs, manages clipboard owner
-processes, and enforces the inactivity lock. On the first search after
-unlock it builds an in-memory index containing only the same allowlisted
-metadata returned to QML. Sync and relevant configuration changes invalidate
-the index; lock, sign-out, and agent exit wipe it.
+processes, and enforces the inactivity lock. After unlock it builds an
+in-memory index containing only the same allowlisted metadata returned to QML;
+the automatic sync performs that cold work before it reports completion, or
+unlock does so after clearing its secret inputs when automatic sync is off.
+Sync and relevant configuration changes rebuild the index; lock, sign-out,
+and agent exit wipe it.
 
 Search keeps a compact, case-folded haystack per projected login. Ranking uses
 a bounded top-K selection because the UI can show at most 50 rows, avoiding a
 full sort for broad queries in large vaults. The last five recent IDs are
 resolved with a bounded scan instead of building another vault-sized map.
-Near-simultaneous status requests from per-monitor widget instances share a
-one-second cache measured from completion of the underlying CLI poll, which
-every state or configuration change invalidates.
+Near-simultaneous locked or signed-out status requests from per-monitor widget
+instances share a one-second cache measured from completion of the underlying
+CLI poll. While the agent owns an unlocked session, that response remains
+authoritative until a state or configuration change invalidates it; this keeps
+routine status polling from blocking interactive searches behind `bw status`.
 
 The socket lives in `$XDG_RUNTIME_DIR/omawarden.sock`, falling back to a
 user-owned runtime directory only when necessary. An advisory lock prevents

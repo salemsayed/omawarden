@@ -612,6 +612,18 @@ class Agent:
                 items.clear()
             completed.stdout = b""
 
+    def _warm_index(self) -> bool:
+        """Best-effort index preparation that never turns a good sync into a failure."""
+        self._clear_index()
+        try:
+            self._load_index()
+        except PublicError:
+            # Search will retry and surface the useful error if the user
+            # actually asks for vault contents later.
+            self._clear_index()
+            return False
+        return True
+
     def _vault_item(self, item_id: str) -> dict[str, Any]:
         if not item_id or len(item_id) > MAX_ITEM_ID_CHARS:
             raise PublicError("That vault entry is no longer available")
@@ -635,7 +647,12 @@ class Agent:
 
     def status(self) -> dict[str, Any]:
         now = time.monotonic()
-        if self._status_cache is not None and now - self._status_cached_at < STATUS_CACHE_SECONDS:
+        # This process owns the only session OmaWarden can use, so an unlocked
+        # status stays authoritative until an action, configuration change, or
+        # automatic lock clears it. Avoid serializing fast index searches
+        # behind the comparatively slow Node-based `bw status` command.
+        cache_is_fresh = now - self._status_cached_at < STATUS_CACHE_SECONDS
+        if self._status_cache is not None and (self.session or cache_is_fresh):
             cached = dict(self._status_cache)
             cached["dependencies"] = dict(self._status_cache.get("dependencies") or {})
             return cached
@@ -697,6 +714,7 @@ class Agent:
     def _unlock_with_password(self, password: bytearray) -> dict[str, Any]:
         fifo: Path | None = None
         fifo_descriptor = -1
+        response: dict[str, Any] | None = None
         try:
             self._clear_index()
             self._clear_status_cache()
@@ -746,9 +764,9 @@ class Agent:
             self.session = session
             self._clear_status_cache()
             self._touch()
-            # Syncing is the panel's job once unlock returns: results appear
-            # from the local cache immediately and refresh when sync lands.
-            return {"ok": True, "status": "unlocked", "message": "Vault unlocked"}
+            # Syncing remains the panel's job so unlock can release the secret
+            # inputs first. That sync warms the index before it reports done.
+            response = {"ok": True, "status": "unlocked", "message": "Vault unlocked"}
         finally:
             for index in range(len(password)):
                 password[index] = 0
@@ -759,6 +777,14 @@ class Agent:
                     fifo.unlink()
                 except FileNotFoundError:
                     pass
+        if response is None:
+            raise PublicError("Unlocking didn't return a usable response")
+        # With server sync disabled there is no follow-up action to hide the
+        # cold CLI load, so prepare the index now, after the password and FIFO
+        # have both been cleared.
+        if not self.config.sync_on_unlock:
+            response["indexReady"] = self._warm_index()
+        return response
 
     def unlock(self) -> dict[str, Any]:
         pinentry = pinentry_executable(self.config.pinentry_command)
@@ -802,10 +828,10 @@ class Agent:
         completed = self._bw("sync", "--quiet", "--nointeraction", session=True, timeout=60)
         if completed.returncode != 0:
             raise PublicError("Sync failed. Check your connection and try again.")
-        self._clear_index()
         self._clear_status_cache()
+        index_ready = self._warm_index()
         self._touch()
-        return {"ok": True, "message": "Vault synced"}
+        return {"ok": True, "message": "Vault synced", "indexReady": index_ready}
 
     def search(self, query: str) -> dict[str, Any]:
         self._require_unlocked()

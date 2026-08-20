@@ -107,13 +107,20 @@ Panel {
     })
   }
 
-  function open() {
+  function prepareOpen() {
     root.searchReady = false
-    root.controller.show()
     root.nowMs = Date.now()
-    bitwarden.refresh()
-    if (bitwarden.unlocked) searchDebounce.restart()
+    // The service already polls status in the background. A fresh `bw status`
+    // takes seconds on some systems and the single-file agent would make this
+    // local index request wait behind it, so opening goes straight to search.
+    if (bitwarden.unlocked && !root.settingsOpen) bitwarden.search(root.query)
+    else if (!root.settingsOpen) bitwarden.refresh()
     focusForState()
+  }
+
+  function open() {
+    if (root.opened) prepareOpen()
+    else root.controller.show()
   }
 
   function close() {
@@ -129,7 +136,7 @@ Panel {
     settingsEditing = false
     if (!settingsOpen && root.opened && bitwarden.unlocked) {
       searchReady = false
-      searchDebounce.restart()
+      bitwarden.search(root.query)
     }
     focusForState()
   }
@@ -235,7 +242,7 @@ Panel {
     return false
   }
 
-  onOpenedChanged: if (opened) open()
+  onOpenedChanged: if (opened) prepareOpen()
   onQueryChanged: {
     searchReady = false
     selectedIndex = 0
@@ -265,7 +272,7 @@ Panel {
     // the state actually resolves.
     function onUnlockedChanged() {
       root.searchReady = false
-      if (bitwarden.unlocked && root.opened && !root.settingsOpen) searchDebounce.restart()
+      if (bitwarden.unlocked && root.opened && !root.settingsOpen) bitwarden.search(root.query)
       if (!bitwarden.unlocked) root.focusForState()
     }
     function onActionCompleted(action, ok) {

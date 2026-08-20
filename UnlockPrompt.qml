@@ -130,7 +130,9 @@ Item {
     property string secret: ""
     property string responseText: ""
 
-    command: ["python3", root.helperPath, "unlock-stdin", "--timeout", "55"]
+    // When automatic sync is disabled, unlock prepares the index itself after
+    // clearing the password input; allow for both bounded CLI operations.
+    command: ["python3", root.helperPath, "unlock-stdin", "--timeout", "120"]
     stdinEnabled: true
 
     onStarted: {

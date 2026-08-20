@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.0.1 - 2026-08-21
+
+- Opening an unlocked panel goes straight to its local index instead of
+  waiting behind the Bitwarden CLI status check.
+- Unlock and sync prepare the memory-only search index in the background, so
+  the first panel search no longer pays the CLI's cold-start cost.
+- Unlocked status polls reuse the agent's authoritative state until a real
+  lock or configuration change, eliminating periodic multi-second stalls.
+- Unlock and sync clients now cover the full bounded index-warmup window on
+  large or slow vaults.
+
 ## 1.0.0 - 2026-08-20
 
 First public release.

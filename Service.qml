@@ -440,7 +440,9 @@ Item {
 
   Process {
     id: actionProcess
-    command: ["python3", root.helperPath, "request", "--timeout", "90"]
+    // Sync may spend up to 60 seconds on the server and then up to 45 seconds
+    // preparing the fresh local index before it reports completion.
+    command: ["python3", root.helperPath, "request", "--timeout", "120"]
     stdinEnabled: true
     onStarted: write(root._actionInput + "\n")
     stdout: StdioCollector {

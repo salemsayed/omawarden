@@ -71,11 +71,22 @@ test("status changes retire hand-off notices without clobbering active work", ()
 test("empty vault copy waits for the current panel search to finish", () => {
   assert.match(panelSource, /property bool searchReady: false/)
   assert.match(panelSource, /readonly property bool searchLoading: !searchReady \|\| bitwarden\.searchBusy/)
-  assert.match(panelSource, /function open\(\) \{\s+root\.searchReady = false/)
+  assert.match(panelSource, /function prepareOpen\(\) \{\s+root\.searchReady = false/)
   assert.match(panelSource, /function onUnlockedChanged\(\) \{\s+root\.searchReady = false/)
   assert.match(panelSource, /function onSearchCompleted\(\)[\s\S]*root\.opened && bitwarden\.unlocked[\s\S]*root\.searchReady = true/)
   assert.match(panelSource, /text: root\.searchLoading\s+\? \(root\.browsing \? "Loading your vault…" : "Searching…"\)/)
   assert.match(serviceSource, /if \(root\._searchQueued\)[\s\S]*root\.search\(next\)[\s\S]*else if \(!cancelled\) root\.searchCompleted\(\)/)
+})
+
+test("opening searches the warm local index without waiting for a status poll", () => {
+  assert.match(panelSource, /function prepareOpen\(\)[\s\S]*bitwarden\.unlocked && !root\.settingsOpen[\s\S]*bitwarden\.search\(root\.query\)[\s\S]*else if \(!root\.settingsOpen\) bitwarden\.refresh\(\)/)
+  assert.match(panelSource, /function open\(\)[\s\S]*root\.opened[\s\S]*prepareOpen\(\)[\s\S]*root\.controller\.show\(\)/)
+  assert.match(panelSource, /onOpenedChanged: if \(opened\) prepareOpen\(\)/)
+})
+
+test("unlock and sync clients cover their bounded index warmup", () => {
+  assert.match(serviceSource, /id: actionProcess[\s\S]*"request", "--timeout", "120"/)
+  assert.match(promptSource, /"unlock-stdin", "--timeout", "120"/)
 })
 
 test("closed panels neither launch nor retain searches", () => {
@@ -83,7 +94,7 @@ test("closed panels neither launch nor retain searches", () => {
   assert.match(serviceSource, /function discardSearch\(\)[\s\S]*_searchCancelled = true[\s\S]*_searchQueued = false[\s\S]*items = \[\]/)
   assert.match(panelSource, /id: searchDebounce[\s\S]*onTriggered: if \(root\.opened && bitwarden\.unlocked/)
   assert.match(panelSource, /id: searchAfterAction[\s\S]*onTriggered: if \(root\.opened && bitwarden\.unlocked/)
-  assert.match(panelSource, /function onUnlockedChanged\(\)[\s\S]*bitwarden\.unlocked && root\.opened[\s\S]*searchDebounce\.restart\(\)/)
+  assert.match(panelSource, /function onUnlockedChanged\(\)[\s\S]*bitwarden\.unlocked && root\.opened[\s\S]*bitwarden\.search\(root\.query\)/)
 })
 
 test("desktop launch reports helper failure through a managed process", () => {
@@ -117,5 +128,5 @@ test("a failed status check drops metadata from the no-longer-open vault", () =>
 })
 
 test("returning from settings refreshes a vault opened directly into settings", () => {
-  assert.match(panelSource, /function toggleSettings\(\)[\s\S]*!settingsOpen && root\.opened && bitwarden\.unlocked[\s\S]*searchDebounce\.restart\(\)/)
+  assert.match(panelSource, /function toggleSettings\(\)[\s\S]*!settingsOpen && root\.opened && bitwarden\.unlocked[\s\S]*bitwarden\.search\(root\.query\)/)
 })
