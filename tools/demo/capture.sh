@@ -15,7 +15,9 @@ OUT=${OUT:-$HERE/out}
 STATE=$HERE/state.json
 export FAKE_BW_STATE=$STATE
 
-# Panel geometry on the 1920x1080 display (filled in after a probe capture).
+# Panel geometry on a 1920x1080 display with the widget at the right of a top
+# bar. Probe once with a wide grim capture, then override PANEL_GEOM, GIF_GEOM
+# and BAR_GEOM for other layouts.
 PANEL_GEOM=${PANEL_GEOM:-"1355,31 520x780"}
 GIF_GEOM=${GIF_GEOM:-"1355,31 520x700"}
 BAR_GEOM=${BAR_GEOM:-"1600,0 32x31"}
