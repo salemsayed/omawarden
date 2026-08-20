@@ -1,0 +1,30 @@
+#!/usr/bin/env python3
+"""Fake Assuan pinentry: answers GETPIN with a demo password after a pause,
+without drawing anything on screen."""
+
+import os
+import sys
+import time
+
+
+def main() -> int:
+    out = sys.stdout
+    out.write("OK Pleased to meet you\n")
+    out.flush()
+    for line in sys.stdin:
+        command = line.strip()
+        if command.startswith("GETPIN"):
+            time.sleep(float(os.environ.get("FAKE_PINENTRY_DELAY", "1.4")))
+            out.write("D demo\nOK\n")
+        elif command == "BYE":
+            out.write("OK closing connection\n")
+            out.flush()
+            return 0
+        else:
+            out.write("OK\n")
+        out.flush()
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

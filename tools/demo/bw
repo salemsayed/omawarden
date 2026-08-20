@@ -1,0 +1,162 @@
+#!/usr/bin/env python3
+"""Fake Bitwarden CLI for OmaWarden screenshots and demo recordings.
+
+Speaks just enough of the real `bw` surface (status, unlock, lock, logout,
+sync, list items, get) and keeps its state in a small JSON file so the demo
+can be steered from the outside without touching a real vault.
+
+  FAKE_BW_STATE  path of the state file (default: next to this script)
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import sys
+import time
+from pathlib import Path
+
+STATE_PATH = Path(os.environ.get("FAKE_BW_STATE") or (Path(__file__).resolve().parent / "state.json"))
+SESSION = "demo-session-token-not-a-real-secret"
+LAST_SYNC = time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime(time.time() - 150))
+
+# Demo logins: names only, fictional accounts, no real data.
+ITEMS = [
+    ("GitHub", "jordan@example.com", "https://github.com", True, True),
+    ("Proton Mail", "jordan@proton.me", "https://account.proton.me", True, False),
+    ("Cloudflare", "ops@example.com", "https://dash.cloudflare.com", False, True),
+    ("DigitalOcean", "jordan@example.com", "https://cloud.digitalocean.com", False, True),
+    ("Fastmail", "jordan@fastmail.com", "https://app.fastmail.com", False, False),
+    ("Gitea", "jordan", "https://git.example.com", False, False),
+    ("Hetzner Cloud", "jordan", "https://console.hetzner.cloud", False, True),
+    ("Hetzner Robot", "K1234567", "https://robot.hetzner.com", False, False),
+    ("Home Router", "admin", "http://192.168.1.1", False, False),
+    ("Mastodon", "@jordan@example.social", "https://example.social", False, True),
+    ("Namecheap", "jordan", "https://www.namecheap.com", False, True),
+    ("Netlify", "jordan@example.com", "https://app.netlify.com", False, False),
+    ("Tailscale", "jordan@example.com", "https://login.tailscale.com", False, False),
+    ("Vercel", "jordan@example.com", "https://vercel.com", False, False),
+    ("Wikipedia", "Jordan Example", "https://en.wikipedia.org", False, False),
+    ("Zulip", "jordan@example.com", "https://example.zulipchat.com", False, False),
+]
+
+
+def load_state() -> dict:
+    try:
+        return json.loads(STATE_PATH.read_text())
+    except (OSError, ValueError):
+        return {"status": "locked"}
+
+
+def save_state(state: dict) -> None:
+    STATE_PATH.write_text(json.dumps(state))
+
+
+def effective_status(state: dict) -> str:
+    status = state.get("status", "locked")
+    if status == "unauthenticated":
+        return status
+    return "unlocked" if os.environ.get("BW_SESSION") == SESSION else "locked"
+
+
+def item_objects() -> list[dict]:
+    rows = []
+    for index, (name, username, url, favorite, totp) in enumerate(ITEMS, start=1):
+        rows.append(
+            {
+                "id": f"00000000-0000-4000-8000-{index:012d}",
+                "type": 1,
+                "name": name,
+                "favorite": favorite,
+                "login": {
+                    "username": username,
+                    "password": "correct-horse-battery-staple",
+                    "totp": "otpauth://totp/demo?secret=JBSWY3DPEHPK3PXP" if totp else None,
+                    "uris": [{"uri": url}],
+                },
+            }
+        )
+    # A card and a note, which OmaWarden must hide.
+    rows.append({"id": "card-1", "type": 3, "name": "Demo Card", "card": {"number": "4111"}})
+    rows.append({"id": "note-1", "type": 2, "name": "Demo Note", "notes": "hello"})
+    return rows
+
+
+def main(argv: list[str]) -> int:
+    state = load_state()
+    args = [a for a in argv if not a.startswith("--")]
+    if not args:
+        print("fake bw", file=sys.stderr)
+        return 1
+    command = args[0]
+    if command == "status":
+        server = state.get("serverUrl")
+        print(json.dumps({"serverUrl": server, "lastSync": LAST_SYNC if effective_status(state) != "unauthenticated" else None,
+                          "userEmail": "jordan@example.com" if effective_status(state) != "unauthenticated" else None,
+                          "userId": "demo", "status": effective_status(state)}))
+        return 0
+    if command == "unlock":
+        if state.get("status") == "unauthenticated":
+            print("You are not logged in.", file=sys.stderr)
+            return 1
+        password = ""
+        if "--passwordfile" in argv:
+            path = argv[argv.index("--passwordfile") + 1]
+            # Like the real CLI (NodeUtils.readFirstLine): first line only, no EOF wait.
+            with open(path, "rb", buffering=0) as stream:
+                password = stream.readline().decode("utf-8", "replace").strip()
+        time.sleep(float(os.environ.get("FAKE_BW_UNLOCK_DELAY", "0.6")))
+        if password == "":
+            print("Invalid master password.", file=sys.stderr)
+            return 1
+        state["status"] = "locked"
+        save_state(state)
+        print(SESSION)
+        return 0
+    if command == "lock":
+        save_state(dict(state, status="locked" if state.get("status") != "unauthenticated" else "unauthenticated"))
+        return 0
+    if command == "logout":
+        save_state(dict(state, status="unauthenticated"))
+        return 0
+    if command == "sync":
+        if effective_status(state) != "unlocked":
+            return 1
+        time.sleep(float(os.environ.get("FAKE_BW_SYNC_DELAY", "0.8")))
+        return 0
+    if command == "list" and len(args) > 1 and args[1] == "items":
+        if effective_status(state) != "unlocked":
+            print("Vault is locked.", file=sys.stderr)
+            return 1
+        time.sleep(float(os.environ.get("FAKE_BW_LIST_DELAY", "0.5")))
+        print(json.dumps(item_objects()))
+        return 0
+    if command == "get" and len(args) > 2:
+        if effective_status(state) != "unlocked":
+            return 1
+        field, item_id = args[1], args[2]
+        for item in item_objects():
+            if item["id"] == item_id:
+                login = item.get("login") or {}
+                if field == "password":
+                    print(login.get("password", ""), end="")
+                elif field == "username":
+                    print(login.get("username", ""), end="")
+                elif field == "totp":
+                    print("123456", end="")
+                else:
+                    return 1
+                return 0
+        return 1
+    if command == "config":
+        save_state(dict(state, serverUrl=args[2] if len(args) > 2 else None))
+        return 0
+    if command == "login":
+        save_state(dict(state, status="locked"))
+        return 0
+    print(f"fake bw: unsupported {command}", file=sys.stderr)
+    return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv[1:]))
