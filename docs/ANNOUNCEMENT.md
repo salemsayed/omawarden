@@ -19,7 +19,8 @@ thirty seconds — never in Omarchy's clipboard history, never in the shell.
 omarchy plugin add https://github.com/salemsayed/omawarden.git --enable
 ```
 
-https://github.com/salemsayed/omawarden
+Marketplace (Verified): https://omarchyplugins.com/plugin.html?id=io.github.salemsayed.omawarden
+Source: https://github.com/salemsayed/omawarden
 
 ## Tweet
 
@@ -28,4 +29,4 @@ https://github.com/salemsayed/omawarden
 > Instant ranked search, one-key copies to a self-clearing clipboard, Pinentry
 > unlock, locks with your screen. Vault secrets never touch the shell.
 >
-> github.com/salemsayed/omawarden
+> omarchyplugins.com/plugin.html?id=io.github.salemsayed.omawarden
