@@ -1,0 +1,22 @@
+#!/bin/bash
+
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+python3 -m py_compile omawarden-agent.py
+jq -e . manifest.json >/dev/null
+if command -v omarchy >/dev/null 2>&1; then
+  omarchy plugin validate . >/dev/null
+else
+  echo "Skipping Omarchy manifest validation (omarchy is not installed)"
+fi
+if command -v qmlformat >/dev/null 2>&1; then
+  for qml_file in BarWidget.qml Service.qml Panel.qml UnlockPrompt.qml; do
+    qmlformat "$qml_file" >/dev/null
+  done
+fi
+node --test tests/Model.test.js tests/IpcLifecycle.test.js
+python3 tests/Agent.test.py
+python3 tests/Manifest.test.py
+
+echo "All OmaWarden tests passed"

@@ -1,0 +1,158 @@
+{
+  "schemaVersion": 1,
+  "id": "io.github.salemsayed.omawarden",
+  "name": "OmaWarden",
+  "version": "1.0.0",
+  "author": "Salem Sayed",
+  "license": "MIT",
+  "description": "Bitwarden in the Omarchy bar: instant vault search, sensitive timed copy, and lock controls, without vault secrets ever reaching the shell UI.",
+  "kinds": [
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "barWidget": "BarWidget.qml"
+  },
+  "barWidget": {
+    "displayName": "OmaWarden",
+    "description": "Search your Bitwarden logins from the bar, copy passwords, usernames and one-time codes to a sensitive timed clipboard, and lock or sync with a keystroke.",
+    "category": "Security",
+    "allowMultiple": false,
+    "defaultSection": "right",
+    "defaults": {
+      "refreshIntervalSec": 30,
+      "autoLockMinutes": 15,
+      "inactivityLockEnabled": true,
+      "clipboardTimeoutSec": 30,
+      "resultLimit": 20,
+      "syncOnUnlock": true,
+      "lockOnScreenLock": true,
+      "showUsernames": true,
+      "defaultCopy": "Password",
+      "cliCommand": "bw",
+      "unlockPrompt": "Pinentry",
+      "pinentryCommand": "auto",
+      "appDataDir": "",
+      "serverUrl": ""
+    },
+    "schema": [
+      {
+        "key": "refreshIntervalSec",
+        "type": "integer",
+        "label": "Status check (seconds)",
+        "min": 10,
+        "max": 3600,
+        "step": 10,
+        "defaultValue": 30,
+        "description": "How often the bar re-reads the local vault state. Never contacts the server."
+      },
+      {
+        "key": "inactivityLockEnabled",
+        "type": "boolean",
+        "label": "Lock after inactivity",
+        "defaultValue": true,
+        "description": "Relock the vault when it goes unused for the inactivity delay. Turn off to lock with the screen only."
+      },
+      {
+        "key": "autoLockMinutes",
+        "type": "integer",
+        "label": "Inactivity delay (minutes)",
+        "min": 5,
+        "max": 240,
+        "step": 5,
+        "defaultValue": 15,
+        "description": "How long the vault may sit unused before it relocks. Only used while Lock after inactivity is on."
+      },
+      {
+        "key": "clipboardTimeoutSec",
+        "type": "integer",
+        "label": "Clipboard timeout (seconds)",
+        "min": 5,
+        "max": 120,
+        "step": 5,
+        "defaultValue": 30,
+        "description": "How long a copied secret stays on the sensitive clipboard before the helper removes it. Omarchy's clipboard history ignores it."
+      },
+      {
+        "key": "resultLimit",
+        "type": "integer",
+        "label": "Results shown",
+        "min": 5,
+        "max": 50,
+        "step": 5,
+        "defaultValue": 20,
+        "description": "Maximum number of logins listed at once."
+      },
+      {
+        "key": "syncOnUnlock",
+        "type": "boolean",
+        "label": "Sync after unlock",
+        "defaultValue": true,
+        "description": "Pull changes from the server in the background each time you unlock."
+      },
+      {
+        "key": "lockOnScreenLock",
+        "type": "boolean",
+        "label": "Lock when the screen locks",
+        "defaultValue": true,
+        "description": "Relock the vault the moment Omarchy's lock screen engages, whatever the inactivity timer says."
+      },
+      {
+        "key": "showUsernames",
+        "type": "boolean",
+        "label": "Show usernames",
+        "defaultValue": true,
+        "description": "Show usernames under login names. Turn off to keep them from onlookers."
+      },
+      {
+        "key": "defaultCopy",
+        "type": "enum",
+        "label": "Enter copies",
+        "options": [
+          "Password",
+          "Username"
+        ],
+        "defaultValue": "Password",
+        "description": "Which field Enter copies. Shift+Enter copies the other one."
+      },
+      {
+        "key": "cliCommand",
+        "type": "string",
+        "label": "Bitwarden CLI command",
+        "defaultValue": "bw",
+        "description": "A name on PATH or a full path, arguments allowed. Runs without a shell."
+      },
+      {
+        "key": "unlockPrompt",
+        "type": "enum",
+        "label": "Unlock prompt",
+        "options": [
+          "Pinentry",
+          "Native"
+        ],
+        "defaultValue": "Pinentry",
+        "description": "Pinentry is the safer default and keeps the master password in a separate process. Native uses a themed prompt inside the shell."
+      },
+      {
+        "key": "pinentryCommand",
+        "type": "string",
+        "label": "Pinentry command",
+        "defaultValue": "auto",
+        "description": "Used only when Unlock prompt is Pinentry: auto, or a Pinentry-compatible program."
+      },
+      {
+        "key": "appDataDir",
+        "type": "string",
+        "label": "CLI profile folder",
+        "defaultValue": "",
+        "description": "Optional separate data folder (BITWARDENCLI_APPDATA_DIR) for keeping a second account apart."
+      },
+      {
+        "key": "serverUrl",
+        "type": "string",
+        "label": "Server URL",
+        "defaultValue": "",
+        "description": "Bitwarden or Vaultwarden base URL for self-hosted and EU accounts. Applied automatically when you sign in; leave empty for bitwarden.com."
+      }
+    ]
+  }
+}
