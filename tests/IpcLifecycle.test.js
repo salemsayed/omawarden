@@ -107,8 +107,8 @@ test("search echoes are trimmed without weakening stale-result checks", () => {
 
 test("new action notices cannot be erased by an older message timer", () => {
   assert.match(serviceSource, /function runAction\(action, extra\)[\s\S]*actionMessageTimer\.stop\(\)[\s\S]*actionBusy = true/)
-  assert.match(serviceSource, /function login\(\)[\s\S]*actionMessageTimer\.stop\(\)[\s\S]*Finish signing in/)
-  assert.match(serviceSource, /function installRequirements\(\)[\s\S]*actionMessageTimer\.stop\(\)[\s\S]*Finish the installation/)
+  assert.match(serviceSource, /function login\(\)[\s\S]*actionMessageTimer\.stop\(\)[\s\S]*Continue in the terminal/)
+  assert.match(serviceSource, /function installRequirements\(\)[\s\S]*actionMessageTimer\.stop\(\)[\s\S]*Continue in the terminal/)
 })
 
 test("a failed status check drops metadata from the no-longer-open vault", () => {

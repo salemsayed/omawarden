@@ -571,7 +571,7 @@ Panel {
               label: "CLI profile folder"
               value: bitwarden.appDataDir
               placeholder: "Default profile"
-              hint: "A separate data folder, for keeping a second account apart"
+              hint: "A separate CLI data folder, for keeping a second account apart"
               onSave: function(next) { root.persistSettings({ appDataDir: next }) }
             }
 
@@ -582,7 +582,7 @@ Panel {
               label: "Bitwarden CLI command"
               value: bitwarden.cliCommand
               placeholder: "bw"
-              hint: "A name on PATH or a full path. Arguments are fine; a shell is never involved."
+              hint: "A command name or full path, arguments allowed."
               onSave: function(next) { root.persistSettings({ cliCommand: next === "" ? "bw" : next }) }
             }
             StepperRow {

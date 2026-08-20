@@ -1364,9 +1364,8 @@ def login_terminal(args: argparse.Namespace) -> int:
                 return configured.returncode
         host = urllib.parse.urlparse(wanted or current).netloc or "bitwarden.com"
         print(f"\nSigning in to {host}.")
-        print("Bitwarden will ask for your email address, master password and,")
-        print("if enabled, a two-step code. Nothing you type here passes through")
-        print("the Omarchy shell.\n")
+        print("Bitwarden will ask for your email, master password and,")
+        print("if enabled, a two-step code.\n")
         completed = subprocess.run(argv + ["login"], env=env, check=False)
         if completed.returncode == 0:
             print("\nSigned in. Back in the bar, choose Unlock vault.")
@@ -1383,10 +1382,9 @@ def login_terminal(args: argparse.Namespace) -> int:
 def install_terminal(args: argparse.Namespace) -> int:
     print("OmaWarden — Install requirements")
     print("=" * 32)
-    print("\nOmaWarden needs bitwarden-cli (the bw command) and")
-    print("wl-clipboard (sensitive, automatically expiring copies).")
+    print("\nOmaWarden needs bitwarden-cli and wl-clipboard.")
     if args.with_pinentry:
-        print("The Pinentry unlock prompt also needs the pinentry package.")
+        print("The Pinentry unlock prompt also needs pinentry.")
     print()
     omarchy = resolve_executable("omarchy")
     if not omarchy:

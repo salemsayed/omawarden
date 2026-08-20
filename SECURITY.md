@@ -1,129 +1,105 @@
 # Security policy
 
-OmaWarden handles access to a decrypted Bitwarden vault. Security regressions
-take priority over features and visual polish.
+OmaWarden handles access to a decrypted Bitwarden vault. Security fixes take
+priority over features and polish.
 
 ## Reporting a vulnerability
 
-Do not open a public issue containing an exploit, credential, session key, or
-vault data. Use GitHub's private vulnerability reporting for this repository.
-Include the affected version, reproduction steps, observed impact, and any
-suggested mitigation. Remove real credentials from logs and screenshots.
+Use GitHub's private vulnerability reporting for this repository. Do not
+open a public issue containing an exploit, credential, session key or vault
+data. Include the version, steps to reproduce, observed impact and, if you
+have one, a suggested fix.
 
 ## Threat model
 
-OmaWarden protects secrets from accidental persistence and exposure through
-the Omarchy shell UI, shell configuration, process arguments, logs, and normal
-clipboard history.
+OmaWarden keeps secrets out of the Omarchy shell UI, shell configuration,
+process arguments, logs and clipboard history.
 
-The following are trusted:
+Trusted: the local user account and kernel; Omarchy, Quickshell, Pinentry,
+`bw` and `wl-copy`; the Wayland compositor; the plugin's installed source.
 
-- the local user account and Linux kernel;
-- Omarchy, Quickshell, Pinentry, `bw`, and `wl-copy` binaries;
-- the active Wayland compositor;
-- this plugin's installed source.
+Out of scope: malware running as the same user; debuggers or memory readers
+with access to the shell, the helper or `bw`; a compromised clipboard
+consumer, compositor, Pinentry or Bitwarden CLI; someone reading usernames
+or item names off your screen.
 
-The following are outside the security boundary:
-
-- malware running as the same user;
-- debuggers or memory readers with permission to inspect the shell, the
-  helper, or `bw`;
-- a compromised clipboard consumer, compositor, Pinentry, or Bitwarden CLI;
-- physical observation of usernames or item names when display privacy is on.
-
-## Secret flow
+## How secrets move
 
 ### Unlock
 
-Two prompts are offered. Both end the same way: the password is written to a
-mode-`0600` FIFO consumed by `bw unlock --passwordfile`, the FIFO is deleted,
-mutable Python password buffers are overwritten, and the returned session key
-stays in the helper's memory, supplied to child `bw` processes through their
-environment and never their arguments.
+Both prompts end the same way: the password is written to a mode-`0600`
+FIFO that `bw unlock --passwordfile` reads, the FIFO is deleted, the Python
+buffers are overwritten, and the session key stays in the helper's memory —
+passed to child `bw` processes through their environment, never their
+arguments.
 
-**Pinentry** (default, stricter). The helper runs a separate Pinentry process
-and reads the password over its Assuan pipe. The master password never exists
-inside the Omarchy shell process.
+**Pinentry** (default). The helper runs a separate Pinentry process and reads
+the password over its Assuan pipe. The master password never exists inside
+the shell process.
 
-**Native** (optional). The shell draws an Omarchy-themed prompt on an overlay
-layer with exclusive keyboard focus, the same arrangement the lock screen and
-polkit dialog use. The password exists in the shell only in that field and
-the buffer handed to the helper: it is written to the helper's stdin (never
-argv, never the environment), relayed to the agent over the private socket as
-raw bytes behind a JSON header, and cleared from each application-level holder
-as soon as it moves on. The field is cleared on submit, dismiss, and whenever
-the session lock engages; Python's mutable copies are overwritten. QML strings
-are managed by the JavaScript runtime, so
-clearing their references cannot promise a physical memory overwrite. A
-bounded maximum length rejects oversized input before it is read. Choosing
-this prompt means trusting the shell process with the password for the
-duration of one unlock. It must be selected explicitly in Settings.
+**Native** (optional, selected explicitly in Settings). The shell draws a
+themed prompt on an overlay with exclusive keyboard focus, as the lock screen
+does. The password is written to the helper's stdin (never argv or the
+environment), relayed to the agent over the private socket, and cleared from
+each holder as soon as it moves on. The field is cleared on submit, dismiss
+and session lock. QML strings are garbage-collected, so clearing them cannot
+promise a physical overwrite — that is the trade-off this prompt makes.
 
 ### Search
 
-The Bitwarden CLI necessarily decrypts full item objects. The agent immediately
-projects them to an allowlist containing only item ID, name, optional
-username, first safe web URL, favorite state, item type, and password/TOTP
-capability flags, and drops everything that is not a login item. Full objects
-and captured CLI output are discarded after projection. The allowlisted
-metadata is indexed in memory while the vault is unlocked so later searches do
-not decrypt the vault again; ranking works on that metadata only. The index is
-never written to disk and is wiped on lock, sign-out, profile change, privacy
-change, or agent exit.
+The Bitwarden CLI decrypts full items. The helper immediately reduces them to
+item ID, name, username, the first safe web URL, favourite flag, type and
+password/TOTP capability flags, keeps only login items, and discards the
+rest. That metadata is indexed in memory for the life of the session and
+wiped on lock, sign-out, profile change, privacy change and exit. It is never
+written to disk.
 
 ### Recently used
 
-The helper remembers the opaque item IDs of the last five entries copied or
-opened so the panel can list them first. IDs alone reveal nothing about the
-vault and are never written to disk. They survive a lock (so the list is
-useful after a relock) and are forgotten on sign-out, CLI or profile change,
-and helper exit.
+The helper remembers the IDs of the last five entries copied or opened, in
+memory only. They survive a lock and are forgotten on sign-out, CLI or
+profile change, and exit.
 
 ### Screen lock
 
-When enabled, the QML service observes Omarchy's native `omarchy.lock` service.
-As soon as the compositor session lock is requested, it queues the same agent
-lock action as the panel button. Busy copy or sync actions cannot drop the
-event: the service retries until the session key and metadata index are wiped.
-An open native unlock prompt is dismissed and cleared at the same moment.
+When enabled, the service watches Omarchy's `omarchy.lock` service and
+queues the same lock action as the panel button the moment the session locks.
+A busy copy or sync cannot drop the event; the service retries until the
+session key and index are gone. An open native prompt is dismissed at the
+same time.
 
 ### Copy
 
-The agent connects `bw get <field>` stdout directly to `wl-copy` stdin. Neither
-Python nor QML captures the copied value. `--sensitive` prevents Omarchy's
-clipboard history from recording it, and the foreground clipboard owner is
-terminated at the configured deadline, on lock, and on sign-out. `--paste-once`
-is deliberately not used: Omarchy's history watcher requests every new
-selection to inspect its sensitivity marker, which would consume the user's
-only paste before it reaches the target application. Copy fields and item IDs
-must match a capability in the current projected login index. A timed-out or
-failed pipeline is terminated and reaped as a process group. The panel's
-countdown is cosmetic; the agent owns the clipboard lifetime.
+`bw get <field>` is piped straight into `wl-copy --sensitive`; neither
+Python nor QML sees the value. The clipboard owner is terminated at the
+configured deadline, on the next copy, on lock and on sign-out. `--paste-once`
+is not used because Omarchy's clipboard-history watcher would consume the
+single paste while checking the sensitivity flag. Copy requests must match a
+capability in the current index. The panel's countdown is cosmetic; the
+helper owns the clipboard lifetime.
 
 ### Local protocol
 
-The Unix socket and advisory lock live only in a real, user-owned runtime
-directory with no group or world permissions. The lock cannot be a symlink;
-the socket is mode `0600`; every Linux peer UID is checked. Requests, responses
-and native-password frames have independent size limits and a protocol version.
-An incomplete client is disconnected after three seconds so it cannot stall
-auto-lock or daemon shutdown. Concurrent clients race safely behind the
-advisory lock, leaving one agent per user.
+The Unix socket and lock file live in a user-owned runtime directory with no
+group or world permissions. The socket is mode `0600`, the lock cannot be a
+symlink, and every peer's UID is checked. Requests, responses and password
+frames have size limits and a protocol version; an incomplete client is
+dropped after three seconds. An advisory lock keeps it to one helper per
+user.
 
 ### Sign-in, sign-out, server
 
-`bw login` runs in a terminal window so credentials and two-step codes are
-typed into the CLI's own prompt. A configured server URL is applied with
-`bw config server` before login and only while signed out. Sign-out runs
-`bw logout`, stops any live clipboard, and wipes the session, index, and
-recents.
+`bw login` runs in a terminal so credentials and two-step codes go to the
+CLI's own prompt. A configured server URL is applied with `bw config server`
+before login, only while signed out. Sign-out runs `bw logout`, clears the
+clipboard and wipes the session, index and recents.
 
-## Intentional limitations
+## Deliberate limitations
 
-- No password reveal UI.
-- No create, edit, delete, attachment, card, identity, or secure-note actions.
-- No REST server (`bw serve`).
-- No session keys in files, shell configuration, IPC responses, or argv.
-- No copy action over IPC: secrets are only ever copied from the panel.
-- Only credential-free `http` and `https` URLs from projected login items can
-  be launched.
+- No password reveal.
+- No create, edit, delete, attachments, cards, identities or notes.
+- No `bw serve`.
+- No session keys in files, configuration, IPC responses or arguments.
+- No copy over IPC; secrets are copied from the panel only.
+- Only credential-free `http` and `https` URLs from your own vault entries
+  can be opened.

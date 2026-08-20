@@ -1,11 +1,10 @@
 # Contributing
 
-Issues and pull requests are welcome. Changes involving authentication,
-session handling, clipboard behavior, command execution, profile permissions,
-or vault projection must include tests and an explanation of their security
-impact.
+Issues and pull requests are welcome. Changes that touch authentication,
+sessions, the clipboard, command execution, profile permissions or vault
+projection need tests and a note on their security impact.
 
-## Local checks
+## Checks
 
 ```bash
 tests/run
@@ -13,52 +12,48 @@ shellcheck tests/run
 omarchy plugin validate .
 ```
 
-CI also runs pinned Python quality tools. To reproduce those checks locally:
+CI also runs the pinned Python tools:
 
 ```bash
-python3 -m pip install --requirement requirements-dev.txt
+python3 -m pip install -r requirements-dev.txt
 ruff check omawarden-agent.py tests
 mypy --python-version 3.11 --check-untyped-defs omawarden-agent.py tests/Agent.test.py tests/Manifest.test.py
 bandit --quiet --recursive omawarden-agent.py --skip B404,B603
 ```
 
-Before submitting a UI change, load the plugin on Omarchy 4, exercise every
-vault state, open the settings page, and inspect the shell log for QML errors
-(`/run/user/$UID/quickshell/by-pid/<pid>/log.log`). `omarchy restart shell` is
-the reliable way to pick up `Panel.qml` changes. Drive the panel over IPC
-(`omarchy-shell io.github.salemsayed.omawarden open|settings|search …`)
-rather than with synthetic keystrokes, which can land in other windows.
+Before submitting a UI change, load the plugin on Omarchy 4, go through
+every vault state and the settings page, and check the shell log for QML
+errors (`/run/user/$UID/quickshell/by-pid/<pid>/log.log`).
+`omarchy restart shell` picks up `Panel.qml` changes reliably. Drive the
+panel over IPC (`omarchy-shell io.github.salemsayed.omawarden open|settings|search …`),
+not with synthetic keystrokes.
 
-Do not include real vault names, usernames, URLs, credentials, or session keys
-in test fixtures, screenshots, issues, or commits. For screenshots, point
-`cliCommand` at a small fake `bw` that prints `example.com` logins, and restore
-the setting afterwards.
+Never put real vault names, usernames, URLs, credentials or session keys in
+fixtures, screenshots, issues or commits. Capture screenshots with
+`tools/demo`.
 
-User-facing text should read as a sentence a person would say: no "agent",
-"session key", "argv", or "FIFO" in the panel. Put new copy in `Model.js`
-where the Node tests can see it.
+User-facing text should read like something a person would say: no "agent",
+"session key", "argv" or "FIFO" in the panel. Put new copy in `Model.js` so
+the tests can see it.
 
 ## Compatibility
 
-Keep the runtime dependency-free beyond standard Python and the packages
-listed in the README. Avoid distro-specific paths, shell evaluation, and APIs
-outside Omarchy's documented plugin contract. User-facing changes must remain
-usable with mouse and keyboard and must have a clear missing-dependency state.
+No runtime dependencies beyond standard Python and the packages in the
+README. No distro-specific paths, no shell evaluation, no APIs outside
+Omarchy's plugin contract. Everything must work with mouse and keyboard and
+show a clear state when a requirement is missing.
 
-## Release checklist
+## Releasing
 
 1. Update `manifest.json` and `CHANGELOG.md` together.
-2. Run the complete test suite on a current Omarchy installation.
-3. Test native, custom-path, and argument-bearing Bitwarden CLI commands.
-4. Test signed-out, locked, unlocked, failed-login, offline-sync, empty-search,
-   missing-TOTP, malformed-URL, timed-out-copy, and partial-IPC cases.
-5. Confirm copied values are absent from Omarchy clipboard history.
-6. Confirm no credential or session value appears in process arguments or
-   journal output.
-7. Run `python3 tests/benchmark.py` and investigate meaningful regressions in
-   index memory, build time, warm search, or recent browsing.
-8. Refresh `preview.png` and `docs/images/` when the panel changed. Capture
-   against a fake `bw` with fictional logins, drive the panel over IPC, and
-   crop to the panel border — never screenshot a real vault.
-9. Commit as `Release OmaWarden X.Y.Z`, tag `vX.Y.Z`, and publish a GitHub
-   release whose notes are the matching `CHANGELOG.md` section.
+2. Run the full test suite on a current Omarchy.
+3. Test a plain `bw`, a full path, and a command with arguments.
+4. Test signed-out, locked, unlocked, failed login, offline sync, empty
+   search, missing TOTP and timed-out copy.
+5. Confirm copied values never appear in Omarchy's clipboard history,
+   process arguments or the journal.
+6. Run `python3 tests/benchmark.py` and look for regressions.
+7. Refresh `preview.png` and `docs/images/` with `tools/demo` if the panel
+   changed.
+8. Commit as `Release OmaWarden X.Y.Z`, tag `vX.Y.Z`, and publish a GitHub
+   release with the CHANGELOG section as its notes.

@@ -157,8 +157,8 @@ Item {
     _actionInput = requestObject(action, extra || {})
     lastError = ""
     actionStatus = action === "unlock" ? "Waiting for your master password…"
-      : (action === "sync" ? "Syncing with the server…"
-        : (action === "lock" ? "Locking vault…"
+      : (action === "sync" ? "Syncing…"
+        : (action === "lock" ? "Locking…"
           : (action === "logout" ? "Signing out…"
             : (action === "copy" ? "Copying…" : "Working…"))))
     actionMessageTimer.stop()
@@ -270,7 +270,7 @@ Item {
     if (helperPath === "") return
     Quickshell.execDetached(terminalArguments("login-terminal"))
     actionMessageTimer.stop()
-    actionStatus = "Finish signing in from the terminal window, then come back here"
+    actionStatus = "Continue in the terminal window, then come back here"
   }
 
   function installRequirements() {
@@ -279,7 +279,7 @@ Item {
     if (unlockPrompt === "pinentry") command.push("--with-pinentry")
     Quickshell.execDetached(command)
     actionMessageTimer.stop()
-    actionStatus = "Finish the installation in the terminal window, then come back here"
+    actionStatus = "Continue in the terminal window, then come back here"
   }
 
   function openDesktop() {

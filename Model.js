@@ -82,7 +82,7 @@ function gateCopy(status, ready, missing, unlockPrompt) {
   if (!ready && state !== "checking") {
     return {
       title: "Set up OmaWarden",
-      body: "A few packages are missing. OmaWarden can install them for you in a terminal window.",
+      body: "Some packages are missing. OmaWarden can install them in a terminal window.",
       action: "Install requirements",
       glyph: "󰏔",
       key: "u"
@@ -113,7 +113,7 @@ function gateCopy(status, ready, missing, unlockPrompt) {
   }
   return {
     title: "Needs attention",
-    body: "OmaWarden couldn't read the vault state. The details are above; Settings lets you change the CLI command or profile if Bitwarden lives somewhere unusual.",
+    body: "OmaWarden couldn't read the vault. If Bitwarden lives somewhere unusual, set its command in Settings.",
     action: "Try again",
     glyph: "󰀪",
     key: "r"
