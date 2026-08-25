@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "io.github.salemsayed.omawarden",
   "name": "OmaWarden",
-  "version": "1.0.1",
+  "version": "1.1.0",
   "author": "Salem Sayed",
   "license": "MIT",
   "description": "Bitwarden in the Omarchy bar: instant search, safe timed copies, lock and sync.",
@@ -14,7 +14,7 @@
   },
   "barWidget": {
     "displayName": "OmaWarden",
-    "description": "Search your Bitwarden logins, copy passwords, usernames and one-time codes to a self-clearing clipboard, lock and sync.",
+    "description": "Search Bitwarden logins and cards, copy their fields to a self-clearing clipboard, lock and sync.",
     "category": "Security",
     "allowMultiple": false,
     "defaultSection": "right",
@@ -80,7 +80,7 @@
         "max": 50,
         "step": 5,
         "defaultValue": 20,
-        "description": "How many logins to list at once."
+        "description": "How many logins and cards to list at once."
       },
       {
         "key": "syncOnUnlock",
@@ -99,9 +99,9 @@
       {
         "key": "showUsernames",
         "type": "boolean",
-        "label": "Show usernames",
+        "label": "Show account names",
         "defaultValue": true,
-        "description": "Show usernames under login names."
+        "description": "Show usernames under logins and cardholder names under cards."
       },
       {
         "key": "defaultCopy",
@@ -112,7 +112,7 @@
           "Username"
         ],
         "defaultValue": "Password",
-        "description": "What Enter copies. Shift+Enter copies the other."
+        "description": "What Enter copies for logins. Cards start with the card number."
       },
       {
         "key": "cliCommand",

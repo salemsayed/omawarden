@@ -84,6 +84,15 @@ test("opening searches the warm local index without waiting for a status poll", 
   assert.match(panelSource, /onOpenedChanged: if \(opened\) prepareOpen\(\)/)
 })
 
+test("keyboard-opened vaults separate command mode from explicit search mode", () => {
+  assert.match(panelSource, /property bool searchModeRequested: false/)
+  assert.match(panelSource, /focusTarget: root\.searchModeRequested && bitwarden\.unlocked \? searchField : keyCatcher/)
+  assert.match(panelSource, /function focusSearch\(selectExisting\)[\s\S]*searchField\.forceActiveFocus\(\)/)
+  assert.match(panelSource, /key === "\/" && bitwarden\.unlocked[\s\S]*root\.focusSearch\(false\)/)
+  assert.match(panelSource, /event\.key === Qt\.Key_F[\s\S]*focusSearch\(true\)/)
+  assert.match(panelSource, /event\.key === Qt\.Key_Escape[\s\S]*root\.searchModeRequested = false[\s\S]*keyCatcher\.forceActiveFocus\(\)/)
+})
+
 test("unlock and sync clients cover their bounded index warmup", () => {
   assert.match(serviceSource, /id: actionProcess[\s\S]*"request", "--timeout", "120"/)
   assert.match(promptSource, /"unlock-stdin", "--timeout", "120"/)

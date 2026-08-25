@@ -76,8 +76,15 @@ def item_objects() -> list[dict]:
                 },
             }
         )
-    # A card and a note, which OmaWarden must hide.
-    rows.append({"id": "card-1", "type": 3, "name": "Demo Card", "card": {"number": "4111"}})
+    rows.append({
+        "id": "card-1", "type": 3, "name": "Travel Card", "favorite": False,
+        "card": {
+            "brand": "Visa", "cardholderName": "Jordan Example",
+            "number": "4111111111111111", "code": "999",
+            "expMonth": "7", "expYear": "2030",
+        },
+    })
+    # Notes and identities remain outside OmaWarden's picker.
     rows.append({"id": "note-1", "type": 2, "name": "Demo Note", "notes": "hello"})
     return rows
 
@@ -137,6 +144,9 @@ def main(argv: list[str]) -> int:
         field, item_id = args[1], args[2]
         for item in item_objects():
             if item["id"] == item_id:
+                if field == "item":
+                    print(json.dumps(item), end="")
+                    return 0
                 login = item.get("login") or {}
                 if field == "password":
                     print(login.get("password", ""), end="")

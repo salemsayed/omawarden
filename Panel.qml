@@ -22,6 +22,7 @@ Panel {
   property int selectedIndex: 0
   property int selectedAction: 0
   property bool settingsEditing: false
+  property bool searchModeRequested: false
   // Empty copy is honest only after this panel opening has received its
   // current search; before that the cleared list means "not loaded yet".
   property bool searchReady: false
@@ -52,7 +53,6 @@ Panel {
   // text is inset by this much, and section headers match so labels align.
   readonly property int rowInset: Style.space(9)
 
-  readonly property var actions: ["password", "username", "totp", "open"]
   readonly property string displayStatus: bitwarden.vaultStatus === "checking"
     ? "checking" : (bitwarden.ready ? bitwarden.vaultStatus : "unavailable")
   readonly property bool attention: displayStatus === "error"
@@ -64,6 +64,7 @@ Panel {
   readonly property var currentItem: bitwarden.items.length > 0
     ? bitwarden.items[Math.max(0, Math.min(selectedIndex, bitwarden.items.length - 1))]
     : null
+  readonly property var actions: Model.itemActions(currentItem)
   readonly property var gate: Model.gateCopy(
     displayStatus, bitwarden.ready, bitwarden.missingRequirements, bitwarden.unlockPrompt)
   readonly property var steps: Model.setupSteps(displayStatus, bitwarden.ready)
@@ -100,10 +101,19 @@ Panel {
   }
 
   function focusForState() {
+    root.searchModeRequested = false
     Qt.callLater(function() {
       if (!root.opened) return
-      if (!root.settingsOpen && bitwarden.unlocked) searchField.forceActiveFocus()
-      else keyCatcher.forceActiveFocus()
+      keyCatcher.forceActiveFocus()
+    })
+  }
+
+  function focusSearch(selectExisting) {
+    root.searchModeRequested = true
+    Qt.callLater(function() {
+      if (!root.opened || root.settingsOpen || !bitwarden.unlocked) return
+      searchField.forceActiveFocus()
+      if (selectExisting === true) searchField.selectAll()
     })
   }
 
@@ -115,7 +125,8 @@ Panel {
     // local index request wait behind it, so opening goes straight to search.
     if (bitwarden.unlocked && !root.settingsOpen) bitwarden.search(root.query)
     else if (!root.settingsOpen) bitwarden.refresh()
-    focusForState()
+    if (root.searchModeRequested) focusSearch(false)
+    else focusForState()
   }
 
   function open() {
@@ -126,6 +137,7 @@ Panel {
   function close() {
     root.query = ""
     root.settingsOpen = false
+    root.searchModeRequested = false
     root.searchReady = false
     bitwarden.discardSearch()
     root.controller.hide()
@@ -134,6 +146,7 @@ Panel {
   function toggleSettings() {
     settingsOpen = !settingsOpen
     settingsEditing = false
+    searchModeRequested = false
     if (!settingsOpen && root.opened && bitwarden.unlocked) {
       searchReady = false
       bitwarden.search(root.query)
@@ -220,6 +233,9 @@ Panel {
     var ctrl = (event.modifiers & Qt.ControlModifier) !== 0
     var alt = (event.modifiers & Qt.AltModifier) !== 0
     var shift = (event.modifiers & Qt.ShiftModifier) !== 0
+    if (ctrl && event.key === Qt.Key_F && bitwarden.unlocked && !settingsOpen) {
+      focusSearch(true); return true
+    }
     if (ctrl && event.key === Qt.Key_Comma) { toggleSettings(); return true }
     if (ctrl && event.key === Qt.Key_D) { bitwarden.openDesktop(); return true }
     if (settingsOpen) return false
@@ -233,12 +249,18 @@ Panel {
     if (alt && event.key === Qt.Key_Right) { moveAction(1); return true }
     if (alt && event.key === Qt.Key_Left) { moveAction(-1); return true }
     if (shift && (event.key === Qt.Key_Return || event.key === Qt.Key_Enter)) {
-      activate(Model.alternateAction(bitwarden.defaultCopy)); return true
+      activate(Model.alternateAction(bitwarden.defaultCopy, currentItem)); return true
     }
-    if (ctrl && event.key === Qt.Key_C && searchField.selectedText === "") { activate("password"); return true }
-    if (ctrl && event.key === Qt.Key_B) { activate("username"); return true }
-    if (ctrl && event.key === Qt.Key_T) { activate("totp"); return true }
-    if (ctrl && event.key === Qt.Key_U) { activate("open"); return true }
+    if (ctrl && event.key === Qt.Key_C && searchField.selectedText === "") {
+      activate(Model.isCard(currentItem) ? "number" : "password"); return true
+    }
+    if (ctrl && event.key === Qt.Key_B) {
+      activate(Model.isCard(currentItem) ? "cardholder" : "username"); return true
+    }
+    if (ctrl && event.key === Qt.Key_T) {
+      activate(Model.isCard(currentItem) ? "cardCode" : "totp"); return true
+    }
+    if (ctrl && event.key === Qt.Key_U && !Model.isCard(currentItem)) { activate("open"); return true }
     return false
   }
 
@@ -249,6 +271,7 @@ Panel {
     resetAction()
     searchDebounce.restart()
   }
+  onCurrentItemChanged: resetAction()
 
   Service {
     id: bitwarden
@@ -273,7 +296,8 @@ Panel {
     function onUnlockedChanged() {
       root.searchReady = false
       if (bitwarden.unlocked && root.opened && !root.settingsOpen) bitwarden.search(root.query)
-      if (!bitwarden.unlocked) root.focusForState()
+      if (root.searchModeRequested && bitwarden.unlocked) root.focusSearch(false)
+      else root.focusForState()
     }
     function onActionCompleted(action, ok) {
       if (ok && (action === "unlock" || action === "sync")) {
@@ -332,7 +356,13 @@ Panel {
     function hide(): void { root.close() }
     function toggle(): void { root.toggle() }
     function settings(): void { root.settingsOpen = true; root.open() }
-    function search(query: string): void { root.settingsOpen = false; root.open(); root.query = Model.sanitizeQuery(query) }
+    function search(query: string): void {
+      root.settingsOpen = false
+      root.searchModeRequested = true
+      root.open()
+      root.query = Model.sanitizeQuery(query)
+      root.focusSearch(false)
+    }
     function refresh(): string { bitwarden.refresh(); return "ok" }
   }
 
@@ -342,7 +372,9 @@ Panel {
     owner: root.barIdentity
     bar: root.bar
     open: root.opened
-    focusTarget: keyCatcher
+    // Opening starts in command mode. Search is an explicit mode entered with
+    // `/` or Ctrl+F, so single-letter panel shortcuts never steal query text.
+    focusTarget: root.searchModeRequested && bitwarden.unlocked ? searchField : keyCatcher
     contentWidth: panel.fittedContentWidth(Style.space(520))
     contentHeight: panel.fittedContentHeight(content.implicitHeight, Style.space(700))
 
@@ -369,7 +401,8 @@ Panel {
       }
       onTextKey: function(text) {
         var key = text.toLowerCase()
-        if (key === "s") root.toggleSettings()
+        if (key === "/" && bitwarden.unlocked && !root.settingsOpen) root.focusSearch(false)
+        else if (key === "s") root.toggleSettings()
         else if (root.settingsOpen) return
         else if (key === "r") bitwarden.unlocked ? bitwarden.sync() : bitwarden.refresh()
         else if (key === "d") bitwarden.openDesktop()
@@ -534,14 +567,14 @@ Panel {
             }
             ChoiceRow {
               label: "Enter copies"
-              description: "Shift+Enter copies the other one"
+              description: "For logins; cards start with the number"
               options: ["Password", "Username"]
               value: Model.primaryAction(bitwarden.defaultCopy) === "username" ? "Username" : "Password"
               onChanged: function(next) { root.persistSettings({ defaultCopy: next }) }
             }
             ToggleRow {
-              label: "Show usernames"
-              description: "Turn off to keep them from onlookers"
+              label: "Show account names"
+              description: "Usernames and cardholders · turn off for privacy"
               checked: bitwarden.showUsernames
               onToggle: root.persistSettings({ showUsernames: !bitwarden.showUsernames })
             }
@@ -746,7 +779,7 @@ Panel {
                   leftPadding: Style.space(32)
                   rightPadding: clearButton.visible ? clearButton.width + Style.space(12) : Style.space(10)
                   foreground: root.foreground
-                  placeholderText: "Search logins…"
+                  placeholderText: activeFocus ? "Search vault…" : "Press / or Ctrl+F to search"
 
                   // Typing replaces any binding on `text`, so field and panel
                   // are kept in step explicitly: the field pushes what the user
@@ -754,6 +787,7 @@ Panel {
                   // lock) back into the field.
                   Component.onCompleted: text = root.query
                   onTextChanged: if (root.query !== text) root.query = text
+                  onActiveFocusChanged: if (activeFocus) root.searchModeRequested = true
 
                   Connections {
                     target: root
@@ -765,7 +799,10 @@ Panel {
                   Keys.onPressed: function(event) {
                     if (event.key === Qt.Key_Escape) {
                       if (text !== "") root.query = ""
-                      else root.close()
+                      else {
+                        root.searchModeRequested = false
+                        keyCatcher.forceActiveFocus()
+                      }
                       event.accepted = true
                     } else if (event.key === Qt.Key_Tab || event.key === Qt.Key_Backtab) {
                       root.switchPanel(event.key === Qt.Key_Backtab || (event.modifiers & Qt.ShiftModifier) ? -1 : 1)
@@ -862,7 +899,7 @@ Panel {
                 anchors.horizontalCenter: parent.horizontalCenter
                 text: root.searchLoading
                   ? (root.browsing ? "Loading your vault…" : "Searching…")
-                  : (root.browsing ? "No logins yet" : "No matching logins")
+                  : (root.browsing ? "No logins or cards yet" : "No matching items")
                 color: root.dim
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.subtitle
@@ -876,8 +913,8 @@ Panel {
                 horizontalAlignment: Text.AlignHCenter
                 wrapMode: Text.WordWrap
                 text: root.browsing
-                  ? "Logins you add in Bitwarden show up here after a sync."
-                  : "Nothing named “" + root.query.trim() + "” — try a username or a domain."
+                  ? "Logins and cards you add in Bitwarden show up here after a sync."
+                  : "Nothing named “" + root.query.trim() + "” — try an account, site, card brand, or last four digits."
                 color: root.faint
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.caption
@@ -927,10 +964,21 @@ Panel {
               visible: bitwarden.items.length > 0
               width: parent.width
               spacing: Style.space(11)
-              KeyHint { keys: ["↵"]; label: Model.primaryAction(bitwarden.defaultCopy) }
-              KeyHint { keys: ["⇧", "↵"]; label: Model.alternateAction(bitwarden.defaultCopy) }
-              KeyHint { keys: ["Ctrl", "T"]; label: "code" }
-              KeyHint { keys: ["Ctrl", "U"]; label: "open site" }
+              KeyHint {
+                keys: searchField.activeFocus ? ["Esc"] : ["/"]
+                label: searchField.activeFocus ? "command mode" : "search"
+              }
+              KeyHint {
+                keys: ["↵"]
+                label: Model.actionLabel(Model.primaryAction(bitwarden.defaultCopy, root.currentItem)).toLowerCase()
+              }
+              KeyHint {
+                visible: Model.alternateAction(bitwarden.defaultCopy, root.currentItem) !== ""
+                keys: ["⇧", "↵"]
+                label: Model.actionLabel(Model.alternateAction(bitwarden.defaultCopy, root.currentItem)).toLowerCase()
+              }
+              KeyHint { keys: ["Ctrl", "T"]; label: Model.isCard(root.currentItem) ? "security code" : "code" }
+              KeyHint { visible: !Model.isCard(root.currentItem); keys: ["Ctrl", "U"]; label: "open site" }
             }
           }
         }
@@ -1808,7 +1856,7 @@ Panel {
       // shows unavailable actions faintly, so capabilities such as TOTP are
       // discoverable without making a dead control look clickable.
       Repeater {
-        model: root.actions
+        model: Model.itemActions(resultRow.item)
 
         PanelActionButton {
           required property string modelData

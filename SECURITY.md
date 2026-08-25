@@ -47,14 +47,18 @@ promise a physical overwrite — that is the trade-off this prompt makes.
 
 ### Search
 
-The Bitwarden CLI decrypts full items. The helper immediately reduces them to
-item ID, name, username, the first safe web URL, favourite flag, type and
-password/TOTP capability flags, keeps only login items, and discards the
-rest. Unlock and sync prepare that index before their background work reports
-ready; when sync is disabled, preparation starts only after the unlock password
-and its FIFO have been cleared. The metadata stays in memory for the life of
-the session and is wiped on lock, sign-out, profile change, privacy change and
-exit. It is never written to disk.
+The Bitwarden CLI decrypts full items. The helper immediately keeps only login
+and card entries and reduces them to allowlisted metadata. For logins that is
+the item ID, name, optional username, first safe web URL, favourite flag, type
+and password/TOTP capability flags. For cards it is the item ID, name,
+optional cardholder, brand, last four digits, favourite flag, type and field
+capability flags. Full card numbers, security codes and expiration dates are
+not indexed or returned to QML. Unlock and sync prepare that index before
+their background work reports ready; when sync is disabled, preparation
+starts only after the unlock password and its FIFO have been cleared. The
+metadata stays in memory for the life of the session and is wiped on lock,
+sign-out, profile change, privacy change and exit. It is never written to
+disk.
 
 ### Recently used
 
@@ -78,13 +82,17 @@ same time.
 
 ### Copy
 
-`bw get <field>` is piped straight into `wl-copy --sensitive`; neither
-Python nor QML sees the value. The clipboard owner is terminated at the
-configured deadline, on the next copy, on lock and on sign-out. `--paste-once`
-is not used because Omarchy's clipboard-history watcher would consume the
-single paste while checking the sensitivity flag. Copy requests must match a
-capability in the current index. The panel's countdown is cosmetic; the
-helper owns the clipboard lifetime.
+For login fields, `bw get <field>` is piped straight into
+`wl-copy --sensitive`; neither Python nor QML sees the value. The CLI has no
+equivalent card-field command, so `bw get item` is piped through a short-lived
+filter process that emits only the requested card value into `wl-copy`. The
+full card object never enters QML, IPC responses or the long-lived agent and
+the filter exits immediately after the copy pipe is filled. The clipboard
+owner is terminated at the configured deadline, on the next copy, on lock and
+on sign-out. `--paste-once` is not used because Omarchy's clipboard-history
+watcher would consume the single paste while checking the sensitivity flag.
+Copy requests must match a capability in the current index. The panel's
+countdown is cosmetic; the helper owns the clipboard lifetime.
 
 ### Local protocol
 
@@ -105,7 +113,7 @@ clipboard and wipes the session, index and recents.
 ## Deliberate limitations
 
 - No password reveal.
-- No create, edit, delete, attachments, cards, identities or notes.
+- No create, edit, delete, attachments, identities or notes.
 - No `bw serve`.
 - No session keys in files, configuration, IPC responses or arguments.
 - No copy over IPC; secrets are copied from the panel only.

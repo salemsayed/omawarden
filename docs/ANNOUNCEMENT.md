@@ -7,7 +7,7 @@ Regenerate with `tools/demo/social.py`.
 
 **OmaWarden** — Bitwarden in the Omarchy bar.
 
-Type a few letters, press Enter, and the password is on your clipboard for
+Press `/`, type a few letters, press Enter, and the password is on your clipboard for
 thirty seconds — never in Omarchy's clipboard history, never in the shell.
 
 - Instant, ranked search of your logins
@@ -26,7 +26,7 @@ Source: https://github.com/salemsayed/omawarden
 
 > OmaWarden — Bitwarden in the Omarchy bar.
 >
-> Instant ranked search, one-key copies to a self-clearing clipboard, Pinentry
+> Instant ranked search for logins and cards, one-key copies to a self-clearing clipboard, Pinentry
 > unlock, locks with your screen. Vault secrets never touch the shell.
 >
 > omarchyplugins.com/plugin.html?id=io.github.salemsayed.omawarden

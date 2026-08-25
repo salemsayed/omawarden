@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.1.0 - 2026-08-25
+
+- Credit cards now appear beside logins and can be searched by name, brand,
+  cardholder or last four digits.
+- Card number, cardholder, security code and expiry can be copied with the
+  same sensitive, self-clearing clipboard used for login secrets.
+- Full card numbers and security codes remain outside QML and the long-lived
+  agent; only safe recognition metadata reaches the panel.
+- Keyboard-opened panels now start in an unambiguous command mode. `/` or
+  `Ctrl+F` enters search mode, where letters cannot trigger panel shortcuts;
+  `Esc` walks back through query → command mode → close.
+
 ## 1.0.1 - 2026-08-21
 
 - Opening an unlocked panel goes straight to its local index instead of

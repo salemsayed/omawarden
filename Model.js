@@ -157,6 +157,10 @@ function itemHost(url) {
   return host.replace(/:\d+$/, "")
 }
 
+function isCard(item) {
+  return !!item && Number(item.type) === 3
+}
+
 // Real vaults name a lot of entries after the site they belong to, so the
 // host would repeat the title on every second row. Drop it when it carries
 // nothing the name has not already said.
@@ -172,6 +176,12 @@ function hostEchoesName(name, host) {
 function itemSubtitle(item, showUsernames) {
   if (!item) return ""
   var parts = []
+  if (isCard(item)) {
+    if (showUsernames && String(item.cardholder || "") !== "") parts.push(String(item.cardholder))
+    if (String(item.brand || "") !== "") parts.push(String(item.brand))
+    if (String(item.last4 || "") !== "") parts.push("•••• " + String(item.last4))
+    return parts.join(" · ")
+  }
   if (showUsernames && String(item.username || "") !== "") parts.push(String(item.username))
   if (String(item.url || "") !== "") {
     try {
@@ -199,7 +209,7 @@ function sectionLabel(item, browsing) {
   if (!browsing || !item) return ""
   if (item.recent === true) return "Recent"
   if (item.favorite === true) return "Favorites"
-  return "All logins"
+  return "All items"
 }
 
 function isSectionStart(items, index, browsing) {
@@ -210,6 +220,10 @@ function isSectionStart(items, index, browsing) {
 
 function actionAvailable(item, action) {
   if (!item) return false
+  if (action === "number") return isCard(item) && item.hasNumber === true
+  if (action === "cardholder") return isCard(item) && item.hasCardholder === true
+  if (action === "cardCode") return isCard(item) && item.hasCardCode === true
+  if (action === "expiry") return isCard(item) && item.hasExpiry === true
   if (action === "password") return item.hasPassword === true
   if (action === "username") return String(item.username || "") !== ""
   if (action === "totp") return item.hasTotp === true
@@ -217,7 +231,19 @@ function actionAvailable(item, action) {
   return false
 }
 
+function itemActions(item) {
+  return isCard(item)
+    ? ["number", "cardholder", "cardCode", "expiry"]
+    : ["password", "username", "totp", "open"]
+}
+
 function defaultAction(item, configured) {
+  if (isCard(item)) {
+    var cardActions = itemActions(item)
+    for (var index = 0; index < cardActions.length; index++)
+      if (actionAvailable(item, cardActions[index])) return cardActions[index]
+    return ""
+  }
   var preferred = String(configured || "Password").toLowerCase()
   if (preferred === "username" && actionAvailable(item, "username")) return "username"
   if (actionAvailable(item, "password")) return "password"
@@ -228,17 +254,29 @@ function defaultAction(item, configured) {
 }
 
 // The copy Enter performs, normalised from the "Enter copies" setting.
-function primaryAction(configured) {
+function primaryAction(configured, item) {
+  if (isCard(item)) return defaultAction(item, configured)
   return String(configured || "Password").toLowerCase() === "username" ? "username" : "password"
 }
 
 // The copy Shift+Enter performs: whichever of password/username Enter does
 // not already cover.
-function alternateAction(configured) {
+function alternateAction(configured, item) {
+  if (isCard(item)) {
+    var primary = primaryAction(configured, item)
+    var cardActions = itemActions(item)
+    for (var index = 1; index < cardActions.length; index++)
+      if (cardActions[index] !== primary && actionAvailable(item, cardActions[index])) return cardActions[index]
+    return ""
+  }
   return String(configured || "Password").toLowerCase() === "username" ? "password" : "username"
 }
 
 function actionLabel(action) {
+  if (action === "number") return "Card number"
+  if (action === "cardholder") return "Cardholder"
+  if (action === "cardCode") return "Security code"
+  if (action === "expiry") return "Expiry"
   if (action === "password") return "Password"
   if (action === "username") return "Username"
   if (action === "totp") return "Code"
@@ -247,6 +285,10 @@ function actionLabel(action) {
 }
 
 function actionGlyph(action) {
+  if (action === "number") return "󰄰"
+  if (action === "cardholder") return "󰀄"
+  if (action === "cardCode") return "󰌆"
+  if (action === "expiry") return "󰃭"
   if (action === "password") return "󰌆"
   if (action === "username") return "󰀄"
   if (action === "totp") return "󰔛"
@@ -255,6 +297,10 @@ function actionGlyph(action) {
 }
 
 function actionTooltip(action) {
+  if (action === "number") return "Copy card number  ·  Ctrl+C"
+  if (action === "cardholder") return "Copy cardholder  ·  Ctrl+B"
+  if (action === "cardCode") return "Copy security code  ·  Ctrl+T"
+  if (action === "expiry") return "Copy expiration date"
   if (action === "password") return "Copy password  ·  Ctrl+C"
   if (action === "username") return "Copy username  ·  Ctrl+B"
   if (action === "totp") return "Copy one-time code  ·  Ctrl+T"
@@ -263,6 +309,10 @@ function actionTooltip(action) {
 }
 
 function unavailableActionTooltip(action) {
+  if (action === "number") return "No number saved for this card"
+  if (action === "cardholder") return "No cardholder saved for this card"
+  if (action === "cardCode") return "No security code saved for this card"
+  if (action === "expiry") return "No expiration date saved for this card"
   if (action === "password") return "No password saved for this login"
   if (action === "username") return "No username saved for this login"
   if (action === "totp") return "No authenticator key saved for this login"
@@ -379,12 +429,14 @@ if (typeof module !== "undefined") {
     setupSteps: setupSteps,
     requirementRows: requirementRows,
     itemHost: itemHost,
+    isCard: isCard,
     hostEchoesName: hostEchoesName,
     itemSubtitle: itemSubtitle,
     isGroupStart: isGroupStart,
     sectionLabel: sectionLabel,
     isSectionStart: isSectionStart,
     actionAvailable: actionAvailable,
+    itemActions: itemActions,
     defaultAction: defaultAction,
     primaryAction: primaryAction,
     alternateAction: alternateAction,

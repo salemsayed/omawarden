@@ -50,6 +50,27 @@ test("item labels honor username privacy", () => {
   assert.equal(Model.itemSubtitle(item, false), "example.test")
 })
 
+test("card labels and actions expose only safe recognition metadata", () => {
+  const card = {
+    type: 3,
+    cardholder: "Example Person",
+    brand: "Visa",
+    last4: "1111",
+    hasNumber: true,
+    hasCardholder: true,
+    hasCardCode: true,
+    hasExpiry: true
+  }
+  assert.equal(Model.itemSubtitle(card, true), "Example Person · Visa · •••• 1111")
+  assert.equal(Model.itemSubtitle(card, false), "Visa · •••• 1111")
+  assert.deepEqual(Model.itemActions(card), ["number", "cardholder", "cardCode", "expiry"])
+  assert.equal(Model.defaultAction(card, "Password"), "number")
+  assert.equal(Model.primaryAction("Password", card), "number")
+  assert.equal(Model.alternateAction("Password", card), "cardholder")
+  assert.equal(Model.actionAvailable(card, "cardCode"), true)
+  assert.equal(Model.actionAvailable(card, "password"), false)
+})
+
 test("actions are only enabled when metadata allows them", () => {
   const item = {
     username: "person",
@@ -177,7 +198,7 @@ test("server labels fall back to the official cloud", () => {
   assert.equal(Model.serverLabel("https://vault.example.test:8443/", "https://other.test"), "vault.example.test")
 })
 
-test("browse sections group recent, favorite, and remaining logins", () => {
+test("browse sections group recent, favorite, and remaining items", () => {
   const items = [
     { name: "Recent one", recent: true, favorite: true },
     { name: "Fav", favorite: true },
@@ -186,7 +207,7 @@ test("browse sections group recent, favorite, and remaining logins", () => {
   ]
   assert.equal(Model.sectionLabel(items[0], true), "Recent")
   assert.equal(Model.sectionLabel(items[1], true), "Favorites")
-  assert.equal(Model.sectionLabel(items[3], true), "All logins")
+  assert.equal(Model.sectionLabel(items[3], true), "All items")
   assert.equal(Model.sectionLabel(items[3], false), "")
   assert.deepEqual(items.map((_, index) => Model.isSectionStart(items, index, true)), [true, true, false, true])
   assert.deepEqual(items.map((_, index) => Model.isSectionStart(items, index, false)), [false, false, false, false])
@@ -196,6 +217,7 @@ test("the copy notice counts the clipboard lifetime down", () => {
   assert.equal(Model.copyNotice("password", 24.2), "Password copied · clears in 25 s")
   assert.equal(Model.copyNotice("totp", 3), "Code copied · clears in 3 s")
   assert.equal(Model.copyNotice("username", 0), "Username copied · clipboard cleared")
+  assert.equal(Model.copyNotice("number", 10), "Card number copied · clears in 10 s")
 })
 
 test("shift+enter copies whichever field enter does not", () => {

@@ -60,10 +60,27 @@ elif command == "list":
         },
         "notes": "DO_NOT_LEAK_NOTES",
         "fields": [{"name": "secret", "value": "DO_NOT_LEAK_FIELD"}]
+    }, {
+        "id": "card-1", "name": "Travel Card", "favorite": False, "type": 3,
+        "card": {
+            "brand": "Visa", "cardholderName": "Example Person",
+            "number": "4111111111111111", "code": "999",
+            "expMonth": "7", "expYear": "2030"
+        }
     }]))
 elif command == "get":
-    values = {"password": "COPIED_PASSWORD", "username": "COPIED_USERNAME", "totp": "123456"}
-    print(values[args[1]])
+    if args[1] == "item" and args[2] == "card-1":
+        print(json.dumps({
+            "id": "card-1", "name": "Travel Card", "type": 3,
+            "card": {
+                "brand": "Visa", "cardholderName": "Example Person",
+                "number": "4111111111111111", "code": "999",
+                "expMonth": "7", "expYear": "2030"
+            }
+        }))
+    else:
+        values = {"password": "COPIED_PASSWORD", "username": "COPIED_USERNAME", "totp": "123456"}
+        print(values[args[1]])
 elif command == "unlock":
     if os.environ.get("FAKE_BW_SKIP_PASSWORD_FILE"):
         raise SystemExit(1)
@@ -148,6 +165,14 @@ class AgentTests(unittest.TestCase):
         for secret in ("DO_NOT_LEAK_PASSWORD", "DO_NOT_LEAK_TOTP_SECRET", "DO_NOT_LEAK_NOTES", "DO_NOT_LEAK_FIELD"):
             self.assertNotIn(secret, serialized)
         self.assertEqual(response["items"][0]["username"], "person@example.test")
+
+        card_response = self.agent.search("travel")
+        card_serialized = json.dumps(card_response)
+        self.assertNotIn("4111111111111111", card_serialized)
+        self.assertNotIn('"999"', card_serialized)
+        self.assertEqual(card_response["items"][0]["last4"], "1111")
+        self.assertEqual(card_response["items"][0]["brand"], "Visa")
+        self.assertEqual(self.agent.search("card")["items"][0]["id"], "card-1")
         self.assertTrue(response["items"][0]["hasPassword"])
         self.assertNotIn("DO_NOT_LEAK", json.dumps(self.agent._item_index))
 
@@ -527,14 +552,23 @@ class AgentTests(unittest.TestCase):
                 env=environment,
             )
 
-    def test_projection_keeps_only_login_items(self) -> None:
+    def test_projection_keeps_login_and_card_items(self) -> None:
         rows = AGENT.project_item_metadata([
             {"id": "login", "name": "Login", "type": 1, "login": {"password": "x"}},
             {"id": "note", "name": "Secure note", "type": 2, "notes": "DO_NOT_LEAK"},
-            {"id": "card", "name": "Card", "type": 3, "card": {"number": "4111"}},
+            {"id": "card", "name": "Card", "type": 3, "card": {
+                "brand": "Visa", "cardholderName": "Example Person", "number": "4111111111111111",
+                "code": "999", "expMonth": "7", "expYear": "2030",
+            }},
             {"id": "identity", "name": "Identity", "type": 4},
         ], True)
-        self.assertEqual([row["id"] for row in rows], ["login"])
+        self.assertEqual([row["id"] for row in rows], ["card", "login"])
+        card = rows[0]
+        self.assertEqual(card["last4"], "1111")
+        self.assertEqual(card["cardholder"], "Example Person")
+        self.assertTrue(card["hasCardCode"])
+        self.assertNotIn("number", card)
+        self.assertNotIn("code", card)
 
     def test_projection_tolerates_malformed_rows_and_sanitizes_display_metadata(self) -> None:
         rows = AGENT.project_item_metadata([
@@ -634,7 +668,7 @@ class AgentTests(unittest.TestCase):
         commands = [json.loads(line) for line in self.bw_log.read_text(encoding="utf-8").splitlines()]
         self.assertIn(["logout", "--quiet", "--nointeraction"], commands)
 
-    def test_copy_and_open_are_restricted_to_projected_login_capabilities(self) -> None:
+    def test_copy_and_open_are_restricted_to_projected_item_capabilities(self) -> None:
         self.agent.session = "session"
         self.agent.search("")
         self.agent._item_index[0][0]["hasTotp"] = False
@@ -646,6 +680,25 @@ class AgentTests(unittest.TestCase):
             self.agent.open_url("https://attacker.example", "item-1")
         with self.assertRaisesRegex(AGENT.PublicError, "no longer available"):
             self.agent.open_url("https://example.test", "missing")
+
+    def test_card_fields_copy_through_the_ephemeral_filter(self) -> None:
+        self.agent.session = "session"
+        self.agent.search("")
+        expected = {
+            "number": b"4111111111111111",
+            "cardholder": b"Example Person",
+            "cardCode": b"999",
+            "expiry": b"07/30",
+        }
+        for field, value in expected.items():
+            with self.subTest(field=field):
+                response = self.agent.copy("card-1", field)
+                self.assertEqual(response["field"], field)
+                self.assertEqual(self.clipboard.read_bytes(), value)
+        with self.assertRaisesRegex(AGENT.PublicError, "login has no number"):
+            self.agent.copy("item-1", "number")
+        with self.assertRaisesRegex(AGENT.PublicError, "card has no password"):
+            self.agent.copy("card-1", "password")
 
     def test_copy_timeout_terminates_the_cli_and_clipboard_processes(self) -> None:
         self.agent.session = "session"

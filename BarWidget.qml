@@ -56,8 +56,10 @@ BarWidget {
   function openSearch(query) {
     if (!panelLoader.item) return
     panelLoader.item.settingsOpen = false
+    panelLoader.item.searchModeRequested = true
     panelLoader.item.open()
     panelLoader.item.query = Model.sanitizeQuery(query)
+    panelLoader.item.focusSearch(false)
   }
 
   implicitWidth: button.implicitWidth

@@ -47,16 +47,18 @@ dismiss, and session lock.
 `omawarden-agent.py` is standard-library Python. The short-lived `request`
 mode starts or connects to a long-lived per-user agent; `unlock-stdin` does
 the same for one native-prompt password. The agent holds the session key,
-executes Bitwarden operations, projects item metadata (login items only),
+executes Bitwarden operations, projects allowlisted login and card metadata,
 ranks searches, tracks recently used item IDs, manages clipboard owner
-processes, and enforces the inactivity lock. After unlock it builds an
-in-memory index containing only the same allowlisted metadata returned to QML;
+processes, and enforces the inactivity lock. Card copies pipe `bw get item`
+through a short-lived field filter because the CLI has no direct card-field
+command. After unlock the agent builds an in-memory index containing only the
+same allowlisted metadata returned to QML;
 the automatic sync performs that cold work before it reports completion, or
 unlock does so after clearing its secret inputs when automatic sync is off.
 Sync and relevant configuration changes rebuild the index; lock, sign-out,
 and agent exit wipe it.
 
-Search keeps a compact, case-folded haystack per projected login. Ranking uses
+Search keeps a compact, case-folded haystack per projected item. Ranking uses
 a bounded top-K selection because the UI can show at most 50 rows, avoiding a
 full sort for broad queries in large vaults. The last five recent IDs are
 resolved with a bounded scan instead of building another vault-sized map.

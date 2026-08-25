@@ -40,8 +40,11 @@ MAX_RESPONSE_BYTES = 2 * 1024 * 1024
 MAX_MASTER_PASSWORD_BYTES = 16 * 1024
 MAX_ITEM_ID_CHARS = 128
 SAFE_URL_SCHEMES = {"http", "https"}
-COPY_FIELDS = {"password", "username", "totp"}
+LOGIN_COPY_FIELDS = {"password", "username", "totp"}
+CARD_COPY_FIELDS = {"number", "cardholder", "cardCode", "expiry"}
+COPY_FIELDS = LOGIN_COPY_FIELDS | CARD_COPY_FIELDS
 LOGIN_ITEM_TYPE = 1
+CARD_ITEM_TYPE = 3
 RECENT_LIMIT = 5
 DESKTOP_LAUNCH_WAIT_SECONDS = 2.0
 
@@ -221,41 +224,64 @@ def project_item_metadata(items: Any, show_usernames: bool) -> list[dict[str, An
         item_id = _display_text(item.get("id"), "", MAX_ITEM_ID_CHARS + 1)
         if not item_id or len(item_id) > MAX_ITEM_ID_CHARS or item_id in seen_ids:
             continue
-        # Cards, identities, and secure notes carry nothing OmaWarden can copy
-        # or open, so a row for them would be dead weight in the results.
         try:
             item_type = int(item.get("type") or 0)
         except (TypeError, ValueError):
             continue
-        if item_type != LOGIN_ITEM_TYPE:
+        if item_type not in {LOGIN_ITEM_TYPE, CARD_ITEM_TYPE}:
             continue
-        raw_login = item.get("login")
-        login: dict[str, Any] = raw_login if isinstance(raw_login, dict) else {}
-        raw_uris = login.get("uris")
-        uris: list[Any] = raw_uris if isinstance(raw_uris, list) else []
-        first_url = ""
-        for uri in uris:
-            if not isinstance(uri, dict):
-                continue
-            candidate = str(uri.get("uri") or "").strip()
-            try:
-                first_url = safe_url(candidate)
-                break
-            except PublicError:
-                continue
-        username = _display_text(login.get("username"), "", 512) if show_usernames else ""
-        projected.append(
-            {
-                "id": item_id,
-                "name": _display_text(item.get("name"), "Untitled", 512),
-                "username": username,
-                "url": first_url,
-                "favorite": bool(item.get("favorite")),
-                "type": item_type,
-                "hasPassword": bool(login.get("password")),
-                "hasTotp": bool(login.get("totp")),
-            }
-        )
+        common = {
+            "id": item_id,
+            "name": _display_text(item.get("name"), "Untitled", 512),
+            "favorite": bool(item.get("favorite")),
+            "type": item_type,
+        }
+        if item_type == LOGIN_ITEM_TYPE:
+            raw_login = item.get("login")
+            login: dict[str, Any] = raw_login if isinstance(raw_login, dict) else {}
+            raw_uris = login.get("uris")
+            uris: list[Any] = raw_uris if isinstance(raw_uris, list) else []
+            first_url = ""
+            for uri in uris:
+                if not isinstance(uri, dict):
+                    continue
+                candidate = str(uri.get("uri") or "").strip()
+                try:
+                    first_url = safe_url(candidate)
+                    break
+                except PublicError:
+                    continue
+            username = _display_text(login.get("username"), "", 512) if show_usernames else ""
+            projected.append(dict(
+                common,
+                username=username,
+                url=first_url,
+                hasPassword=bool(login.get("password")),
+                hasTotp=bool(login.get("totp")),
+            ))
+        else:
+            raw_card = item.get("card")
+            card: dict[str, Any] = raw_card if isinstance(raw_card, dict) else {}
+            raw_number = str(card.get("number") or "").strip()
+            digits = "".join(character for character in raw_number if character.isdigit())
+            projected.append(dict(
+                common,
+                username="",
+                url="",
+                brand=_display_text(card.get("brand"), "", 128),
+                cardholder=(
+                    _display_text(card.get("cardholderName"), "", 512)
+                    if show_usernames else ""
+                ),
+                # Four trailing digits are useful recognition metadata; never
+                # send the complete card number or security code to QML.
+                last4=digits[-4:] if len(digits) >= 4 else "",
+                hasNumber=bool(raw_number),
+                hasCardholder=bool(str(card.get("cardholderName") or "").strip()),
+                hasCardCode=bool(str(card.get("code") or "").strip()),
+                hasExpiry=bool(str(card.get("expMonth") or "").strip())
+                and bool(str(card.get("expYear") or "").strip()),
+            ))
         seen_ids.add(item_id)
     projected.sort(key=lambda row: (not row["favorite"], row["name"].casefold(), row["username"].casefold()))
     return projected
@@ -278,15 +304,21 @@ def build_search_index(items: list[dict[str, Any]]) -> list[SearchEntry]:
     """Precompute a case-insensitive haystack from allowlisted metadata only.
 
     Each entry is (item, haystack) where the haystack joins the item name,
-    username, and host with newlines so ``term in haystack`` stays a cheap
-    containment test and the ranker can still tell the fields apart.
+    secondary display metadata, and host with newlines so ``term in haystack``
+    stays a cheap containment test and the ranker can still tell the fields
+    apart.
     """
     indexed: list[SearchEntry] = []
     for item in items:
         name = str(item.get("name") or "").casefold()
-        username = str(item.get("username") or "").casefold()
+        secondary = str(item.get("username") or "").casefold()
+        if item.get("type") == CARD_ITEM_TYPE:
+            secondary = "card " + " ".join(
+                str(item.get(field) or "").casefold()
+                for field in ("cardholder", "brand", "last4")
+            )
         host = url_host(str(item.get("url") or ""))
-        indexed.append((item, f"{name}\n{username}\n{host}"))
+        indexed.append((item, f"{name}\n{secondary}\n{host}"))
     return indexed
 
 
@@ -385,6 +417,48 @@ def browse_index(
         rows.append(item)
         seen.add(item["id"])
     return rows[:limit]
+
+
+def card_field_value(item: Any, field: str) -> str:
+    """Extract one copyable value inside the short-lived card filter process."""
+    if not isinstance(item, dict) or item.get("type") != CARD_ITEM_TYPE:
+        raise PublicError("That vault entry is not a card")
+    raw_card = item.get("card")
+    card: dict[str, Any] = raw_card if isinstance(raw_card, dict) else {}
+    if field == "number":
+        value = str(card.get("number") or "").strip()
+    elif field == "cardholder":
+        value = str(card.get("cardholderName") or "").strip()
+    elif field == "cardCode":
+        value = str(card.get("code") or "").strip()
+    elif field == "expiry":
+        month = str(card.get("expMonth") or "").strip()
+        year = str(card.get("expYear") or "").strip()
+        try:
+            month = f"{int(month):02d}"
+        except ValueError:
+            month = ""
+        if len(year) == 4 and year.isdigit():
+            year = year[-2:]
+        value = f"{month}/{year}" if month and year else ""
+    else:
+        raise PublicError("That card field can't be copied")
+    if not value:
+        raise PublicError("That card field is empty")
+    return value[:4096]
+
+
+def extract_card_field(args: argparse.Namespace) -> int:
+    """Filter `bw get item` output without exposing the full item to the agent."""
+    try:
+        raw = sys.stdin.buffer.read(MAX_RESPONSE_BYTES + 1)
+        if len(raw) > MAX_RESPONSE_BYTES:
+            raise PublicError("The card entry is too large")
+        item = json.loads(raw.decode("utf-8"))
+        sys.stdout.write(card_field_value(item, args.field))
+        return 0
+    except (json.JSONDecodeError, UnicodeDecodeError, RecursionError, PublicError):
+        return 1
 
 
 def pinentry_executable(configured: str) -> str | None:
@@ -850,13 +924,21 @@ class Agent:
         if field not in COPY_FIELDS:
             raise PublicError("That field can't be copied")
         item = self._vault_item(item_id)
-        available = {
+        item_type = item.get("type")
+        available = ({
             "password": item.get("hasPassword") is True,
             "username": bool(item.get("username")),
             "totp": item.get("hasTotp") is True,
-        }
-        if not available[field]:
-            raise PublicError(f"That login has no {'code' if field == 'totp' else field} to copy")
+        } if item_type == LOGIN_ITEM_TYPE else {
+            "number": item.get("hasNumber") is True,
+            "cardholder": item.get("hasCardholder") is True,
+            "cardCode": item.get("hasCardCode") is True,
+            "expiry": item.get("hasExpiry") is True,
+        } if item_type == CARD_ITEM_TYPE else {})
+        if not available.get(field, False):
+            noun = "code" if field in {"totp", "cardCode"} else field
+            kind = "card" if item_type == CARD_ITEM_TYPE else "login"
+            raise PublicError(f"That {kind} has no {noun} to copy")
         wl_copy = resolve_executable("wl-copy")
         if not wl_copy:
             raise PublicError("wl-clipboard isn't installed, so nothing can be copied")
@@ -865,10 +947,12 @@ class Agent:
         # also bounds process/timer growth during repeated copy shortcuts.
         self._stop_clipboards()
         bw_process: subprocess.Popen[bytes] | None = None
+        filter_process: subprocess.Popen[bytes] | None = None
         clipboard: subprocess.Popen[bytes] | None = None
         try:
+            bw_arguments = [field, item_id] if item_type == LOGIN_ITEM_TYPE else ["item", item_id]
             bw_process = subprocess.Popen(
-                self.config.bw_argv() + ["get", field, item_id, "--raw", "--nointeraction"],
+                self.config.bw_argv() + ["get"] + bw_arguments + ["--raw", "--nointeraction"],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.DEVNULL,
                 env=self.config.environment(self.session),
@@ -876,29 +960,52 @@ class Agent:
             )
             if bw_process.stdout is None:
                 raise PublicError("Bitwarden couldn't open the secure copy pipe")
+            copy_source = bw_process.stdout
+            if item_type == CARD_ITEM_TYPE:
+                filter_process = subprocess.Popen(
+                    [sys.executable, str(Path(__file__).resolve()), "extract-card-field", field],
+                    stdin=bw_process.stdout,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.DEVNULL,
+                    start_new_session=True,
+                )
+                bw_process.stdout.close()
+                if filter_process.stdout is None:
+                    raise PublicError("OmaWarden couldn't open the card copy pipe")
+                copy_source = filter_process.stdout
             clipboard = subprocess.Popen(
                 [wl_copy, "--foreground", "--sensitive", "--trim-newline"],
-                stdin=bw_process.stdout,
+                stdin=copy_source,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
                 start_new_session=True,
             )
-            bw_process.stdout.close()
+            copy_source.close()
+            deadline = time.monotonic() + COPY_TIMEOUT_SECONDS
             try:
-                return_code = bw_process.wait(timeout=COPY_TIMEOUT_SECONDS)
+                return_code = bw_process.wait(timeout=max(0.01, deadline - time.monotonic()))
+                filter_code = (
+                    filter_process.wait(timeout=max(0.01, deadline - time.monotonic()))
+                    if filter_process is not None else 0
+                )
             except subprocess.TimeoutExpired as exc:
                 _terminate_process(clipboard)
+                if filter_process is not None:
+                    _terminate_process(filter_process)
                 _terminate_process(bw_process)
                 raise PublicError("Bitwarden took too long to copy that value") from exc
-            if return_code != 0:
+            if return_code != 0 or filter_code != 0:
                 _terminate_process(clipboard)
-                raise PublicError(f"Couldn't copy the {'code' if field == 'totp' else field}")
+                label = "code" if field in {"totp", "cardCode"} else field
+                raise PublicError(f"Couldn't copy the {label}")
             clipboard_status = clipboard.poll()
             if clipboard_status not in {None, 0}:
                 raise PublicError("The secure clipboard couldn't be opened")
         except OSError as exc:
             if clipboard is not None:
                 _terminate_process(clipboard)
+            if filter_process is not None:
+                _terminate_process(filter_process)
             if bw_process is not None:
                 _terminate_process(bw_process)
             raise PublicError("The secure copy process couldn't start") from exc
@@ -914,7 +1021,14 @@ class Agent:
             timer.start()
         self._touch()
         self._remember_recent(item_id)
-        label = "Code" if field == "totp" else field.capitalize()
+        labels = {
+            "totp": "Code",
+            "number": "Card number",
+            "cardholder": "Cardholder",
+            "cardCode": "Security code",
+            "expiry": "Expiry",
+        }
+        label = labels.get(field, field.capitalize())
         return {"ok": True, "message": f"{label} copied", "field": field}
 
     def configure_server(self, url: str) -> dict[str, Any]:
@@ -1470,6 +1584,8 @@ def build_parser() -> argparse.ArgumentParser:
     request_parser.add_argument("--timeout", type=float, default=70.0)
     unlock_parser = subparsers.add_parser("unlock-stdin", help="Relay a native prompt over stdin")
     unlock_parser.add_argument("--timeout", type=float, default=55.0)
+    card_filter = subparsers.add_parser("extract-card-field", help=argparse.SUPPRESS)
+    card_filter.add_argument("field", choices=sorted(CARD_COPY_FIELDS))
     interactive = argparse.ArgumentParser(add_help=False)
     interactive.add_argument("--bw-command", default="bw")
     interactive.add_argument("--pinentry-command", default="auto")
@@ -1493,6 +1609,8 @@ def main() -> int:
         return serve()
     if args.mode == "unlock-stdin":
         return unlock_stdin(args)
+    if args.mode == "extract-card-field":
+        return extract_card_field(args)
     if args.mode == "request":
         try:
             # Quickshell keeps the Process stdin pipe open for the process

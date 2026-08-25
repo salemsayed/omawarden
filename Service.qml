@@ -19,8 +19,8 @@ Item {
   property string actionStatus: ""
   readonly property string displayActionStatus: unlocked && actionStatus === nativeUnlockMessage
     ? "" : actionStatus
-  // Field of the most recent successful copy ("password", "username",
-  // "totp"); the panel phrases its clipboard countdown from it.
+  // Field of the most recent successful login or card copy; the panel phrases
+  // its clipboard countdown from it.
   property string lastCopyField: ""
   property bool statusBusy: false
   property bool searchBusy: false

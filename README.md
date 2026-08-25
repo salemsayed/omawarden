@@ -1,8 +1,8 @@
 # OmaWarden
 
-**Bitwarden in the Omarchy bar.** Type a few letters, press Enter, and the
-password is on your clipboard for thirty seconds — never in Omarchy's
-clipboard history, never in the shell.
+**Bitwarden in the Omarchy bar.** Press `/`, type a few letters, then press
+Enter: the selected login or card value is on your clipboard for thirty
+seconds — never in Omarchy's clipboard history, never in the shell.
 
 ## Demo
 
@@ -26,15 +26,17 @@ The bar icon, locked, unlocked and needing attention:
 
 ## Highlights
 
-- **Instant.** Search runs against an in-memory index of names, usernames
-  and sites. Results are ranked — `git` finds *GitHub* before
-  *DigitalOcean* — and the panel opens on what you used last.
+- **Instant.** Search runs against an in-memory index of login names,
+  usernames and sites plus card names, brands and last four digits. Results
+  are ranked — `git` finds *GitHub* before *DigitalOcean* — and the panel
+  opens on what you used last.
 - **Safe.** The shell only ever sees names, usernames and sites. Passwords,
   one-time codes and the session key stay in a small per-user helper and go
   from the Bitwarden CLI straight to a sensitive, self-clearing clipboard.
-- **Keyboard first.** `Enter` copies the password, `Shift+Enter` the
-  username, `Ctrl+T` the one-time code, `Ctrl+U` opens the site — all
-  without leaving the search box.
+- **Keyboard first.** The panel opens in command mode; `/` or `Ctrl+F` enters
+  search mode. `Enter` copies the primary value, `Shift+Enter` the alternate,
+  and the Ctrl shortcuts reach passwords, usernames, card fields, one-time
+  codes and websites.
 - **Native.** Built from Omarchy's own components, so it follows your theme
   and locks with your screen.
 
@@ -59,25 +61,27 @@ A padlock appears in the bar. Click it and follow the three steps:
 
 ## Use
 
-Open the panel, start typing, press Enter.
+Open the panel, press `/` (or `Ctrl+F`), start typing, then press Enter.
 
-Every row has buttons for password, username, one-time code and website.
-Buttons for fields a login doesn't have appear faintly on the selected row.
+Login rows have actions for password, username, one-time code and website.
+Card rows have actions for number, cardholder, security code and expiry.
+Unavailable fields appear faintly on the selected row.
 
 | Key | Action |
 | --- | --- |
+| `/` / `Ctrl+F` | Focus search; `/` can then be typed normally inside it |
 | `↑` `↓` | Move between results |
-| `Enter` | Copy the password (or the username, see Settings) |
-| `Shift+Enter` | Copy the other one |
-| `Ctrl+C` / `Ctrl+B` | Copy password / username |
-| `Ctrl+T` | Copy the one-time code |
-| `Ctrl+U` | Open the website |
+| `Enter` | Copy password/username for a login, or card number for a card |
+| `Shift+Enter` | Copy the alternate login or card field |
+| `Ctrl+C` / `Ctrl+B` | Copy password/username or card number/cardholder |
+| `Ctrl+T` | Copy the one-time code or card security code |
+| `Ctrl+U` | Open a login's website |
 | `Alt+←` `Alt+→` | Choose the action for the selected row |
 | `Ctrl+R` | Sync |
 | `Ctrl+L` | Lock |
 | `Ctrl+D` | Open the Bitwarden desktop app |
 | `Ctrl+,` | Settings |
-| `Esc` | Clear the search, then close |
+| `Esc` | Clear search, leave search mode, then close |
 
 While the vault is locked: `Enter` unlocks, `r` refreshes, `s` opens
 settings, `d` opens the desktop app.
@@ -108,8 +112,8 @@ omarchy bar set io.github.salemsayed.omawarden defaultCopy Username
 | `unlockPrompt` | `Pinentry` | `Pinentry` or `Native` |
 | `pinentryCommand` | `auto` | Pinentry program; `auto` picks one |
 | `clipboardTimeoutSec` | `30` | Clipboard lifetime, 5–120 seconds |
-| `defaultCopy` | `Password` | What Enter copies |
-| `showUsernames` | `true` | Show usernames under login names |
+| `defaultCopy` | `Password` | What Enter copies for logins; cards start with number |
+| `showUsernames` | `true` | Show usernames and cardholder names |
 | `resultLimit` | `20` | Rows listed at once, 5–50 |
 | `syncOnUnlock` | `true` | Sync after each unlock |
 | `serverUrl` | *(empty)* | Self-hosted or EU server, applied at sign-in |
@@ -158,9 +162,10 @@ There is no `copy` over IPC, on purpose.
 
 ## Security
 
-- The panel receives names, usernames, sites and capability flags — never
-  passwords, one-time-code seeds, notes or custom fields. Cards, identities
-  and notes are not listed.
+- The panel receives names, usernames, sites, card brands and last four
+  digits, plus capability flags — never passwords, full card numbers,
+  security codes, one-time-code seeds, notes or custom fields. Identities and
+  notes are not listed.
 - The session key lives only in the helper's memory and reaches `bw`
   through its environment, never its arguments.
 - The helper listens on a user-only Unix socket in a private runtime
