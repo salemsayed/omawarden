@@ -126,6 +126,24 @@ class ManifestTests(unittest.TestCase):
             mode = path.stat().st_mode
             self.assertFalse(mode & (stat.S_IWGRP | stat.S_IWOTH), str(path.relative_to(ROOT)))
 
+    def test_every_text_surface_renders_vault_data_as_literal_plain_text(self) -> None:
+        qml = "\n".join(
+            (ROOT / name).read_text(encoding="utf-8")
+            for name in ("Panel.qml", "UnlockPrompt.qml")
+        )
+        text_items = re.findall(r"\bText\s*\{", qml)
+        plain_text_items = re.findall(
+            r"\bText\s*\{\s*textFormat:\s*Text\.PlainText\b", qml
+        )
+        section_headers = re.findall(r"\bPanelSectionHeader\s*\{", qml)
+        plain_section_headers = re.findall(
+            r"\bPanelSectionHeader\s*\{\s*textFormat:\s*Text\.PlainText\b", qml
+        )
+        self.assertEqual(len(text_items), 33)
+        self.assertEqual(len(plain_text_items), len(text_items))
+        self.assertEqual(len(section_headers), 1)
+        self.assertEqual(len(plain_section_headers), len(section_headers))
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

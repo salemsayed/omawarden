@@ -682,6 +682,7 @@ Panel {
             }
 
             Text {
+              textFormat: Text.PlainText
               anchors.horizontalCenter: parent.horizontalCenter
               text: root.gate.title
               color: root.foreground
@@ -691,6 +692,7 @@ Panel {
             }
 
             Text {
+              textFormat: Text.PlainText
               visible: text !== ""
               x: Style.space(22)
               width: parent.width - Style.space(44)
@@ -729,6 +731,7 @@ Panel {
             // Where a sign-in will land, so a self-hosted user notices before
             // the terminal opens rather than after.
             Text {
+              textFormat: Text.PlainText
               visible: bitwarden.ready && bitwarden.vaultStatus === "unauthenticated"
               anchors.horizontalCenter: parent.horizontalCenter
               width: parent.width - Style.space(44)
@@ -815,6 +818,7 @@ Panel {
                 }
 
                 Text {
+                  textFormat: Text.PlainText
                   anchors.left: parent.left
                   anchors.leftMargin: Style.space(12)
                   anchors.verticalCenter: parent.verticalCenter
@@ -877,6 +881,7 @@ Panel {
               Item { width: 1; height: Style.space(14) }
 
               Text {
+                textFormat: Text.PlainText
                 id: emptyGlyph
                 anchors.horizontalCenter: parent.horizontalCenter
                 text: root.searchLoading ? "󰑓" : (root.browsing ? "󰍉" : "󰧬")
@@ -896,6 +901,7 @@ Panel {
               }
 
               Text {
+                textFormat: Text.PlainText
                 anchors.horizontalCenter: parent.horizontalCenter
                 text: root.searchLoading
                   ? (root.browsing ? "Loading your vault…" : "Searching…")
@@ -907,6 +913,7 @@ Panel {
               }
 
               Text {
+                textFormat: Text.PlainText
                 anchors.horizontalCenter: parent.horizontalCenter
                 visible: !root.searchLoading
                 width: parent.width - Style.space(44)
@@ -1008,6 +1015,7 @@ Panel {
     Behavior on color { ColorAnimation { duration: 180 } }
 
     Text {
+      textFormat: Text.PlainText
       anchors.centerIn: parent
       text: badge.glyph
       color: badge.tint
@@ -1066,6 +1074,7 @@ Panel {
           borderSpec: Border.flat(Util.alpha(stepItem.tone, stepItem.current ? 0.9 : 0.4), 1)
 
           Text {
+            textFormat: Text.PlainText
             anchors.centerIn: parent
             text: stepItem.done ? "󰄬" : String(stepItem.index + 1)
             color: stepItem.tone
@@ -1076,6 +1085,7 @@ Panel {
         }
 
         Text {
+          textFormat: Text.PlainText
           anchors.verticalCenter: parent.verticalCenter
           text: stepItem.modelData.label
           color: stepItem.current ? root.foreground : (stepItem.done ? root.dim : root.faint)
@@ -1150,6 +1160,7 @@ Panel {
         spacing: Style.space(8)
 
         Text {
+          textFormat: Text.PlainText
           anchors.verticalCenter: parent.verticalCenter
           text: requirementRow.modelData.ok ? "󰄬" : "󰅖"
           color: requirementRow.modelData.ok ? root.accent : root.urgent
@@ -1158,6 +1169,7 @@ Panel {
         }
 
         Text {
+          textFormat: Text.PlainText
           anchors.verticalCenter: parent.verticalCenter
           text: requirementRow.modelData.label
           color: requirementRow.modelData.ok ? root.dim : root.foreground
@@ -1166,6 +1178,7 @@ Panel {
         }
 
         Text {
+          textFormat: Text.PlainText
           anchors.verticalCenter: parent.verticalCenter
           text: requirementRow.modelData.detail
           color: root.faint
@@ -1267,6 +1280,7 @@ Panel {
       spacing: Style.space(8)
 
       Text {
+        textFormat: Text.PlainText
         text: notice.glyph
         color: notice.tint
         font.family: root.fontFamily
@@ -1274,6 +1288,7 @@ Panel {
       }
 
       Text {
+        textFormat: Text.PlainText
         width: noticeRow.width - x
         text: notice.text
         color: notice.tint
@@ -1355,6 +1370,7 @@ Panel {
     bottomPadding: Style.space(2)
 
     Text {
+      textFormat: Text.PlainText
       anchors.verticalCenter: parent.verticalCenter
       text: sectionHeader.glyph
       color: root.faint
@@ -1363,6 +1379,7 @@ Panel {
     }
 
     PanelSectionHeader {
+      textFormat: Text.PlainText
       text: sectionHeader.label
       foreground: root.foreground
       fontFamily: root.fontFamily
@@ -1378,6 +1395,7 @@ Panel {
     implicitHeight: visible ? sectionText.implicitHeight + Style.space(first ? 4 : 12) : 0
 
     Text {
+      textFormat: Text.PlainText
       id: sectionText
       x: root.rowInset
       anchors.bottom: parent.bottom
@@ -1401,6 +1419,7 @@ Panel {
   }
 
   component Paragraph: Text {
+    textFormat: Text.PlainText
     property bool faded: false
     x: root.rowInset
     width: (parent ? parent.width : implicitWidth) - root.rowInset * 2
@@ -1426,6 +1445,7 @@ Panel {
     borderSpec: Border.flat(Util.alpha(tint, 0.15), 1)
 
     Text {
+      textFormat: Text.PlainText
       id: chipText
       anchors.centerIn: parent
       text: chip.text
@@ -1443,6 +1463,7 @@ Panel {
     spacing: Style.space(2)
 
     Text {
+      textFormat: Text.PlainText
       width: rowLabels.width
       text: rowLabels.label
       color: root.foreground
@@ -1452,6 +1473,7 @@ Panel {
     }
 
     Text {
+      textFormat: Text.PlainText
       visible: rowLabels.description !== ""
       width: rowLabels.width
       text: rowLabels.description
@@ -1643,6 +1665,7 @@ Panel {
       spacing: Style.space(6)
 
       Text {
+        textFormat: Text.PlainText
         text: fieldRoot.label
         color: root.faint
         font.family: root.fontFamily
@@ -1650,6 +1673,7 @@ Panel {
       }
 
       Text {
+        textFormat: Text.PlainText
         text: "󰄬 Saved"
         visible: opacity > 0
         opacity: fieldRoot.justSaved ? 1 : 0
@@ -1688,6 +1712,7 @@ Panel {
     }
 
     Text {
+      textFormat: Text.PlainText
       visible: fieldRoot.hint !== ""
       width: parent.width
       text: fieldRoot.hint
@@ -1720,6 +1745,7 @@ Panel {
         borderSpec: Border.flat(Util.alpha(root.foreground, 0.18), 1)
 
         Text {
+          textFormat: Text.PlainText
           id: capText
           anchors.centerIn: parent
           text: modelData
@@ -1731,6 +1757,7 @@ Panel {
     }
 
     Text {
+      textFormat: Text.PlainText
       anchors.verticalCenter: parent.verticalCenter
       leftPadding: Style.space(2)
       text: hint.label
@@ -1802,6 +1829,7 @@ Panel {
         // many rows deep. Only the first of each run carries it at full
         // strength; the rest recede into a quiet column.
         Text {
+          textFormat: Text.PlainText
           anchors.centerIn: parent
           text: Model.monogram(resultRow.item.name)
           color: resultRow.hasCursor ? root.accent : root.dim
@@ -1815,6 +1843,7 @@ Panel {
         // Favorites carry their star on the tile corner rather than beside
         // the name, so it never competes with an elided title.
         Text {
+          textFormat: Text.PlainText
           visible: resultRow.item.favorite === true
           anchors.right: parent.right
           anchors.top: parent.top
@@ -1832,6 +1861,7 @@ Panel {
         spacing: Style.space(1)
 
         Text {
+          textFormat: Text.PlainText
           Layout.fillWidth: true
           text: String(resultRow.item.name || "Untitled")
           color: root.foreground
@@ -1842,6 +1872,7 @@ Panel {
         }
 
         Text {
+          textFormat: Text.PlainText
           Layout.fillWidth: true
           visible: text !== ""
           text: Model.itemSubtitle(resultRow.item, bitwarden.showUsernames)

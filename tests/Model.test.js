@@ -17,6 +17,16 @@ test("state presentation covers every agent state", () => {
   assert.notEqual(Model.statusGlyph("error"), Model.statusGlyph("unlocked"))
 })
 
+test("the inherited Omarchy bar tooltip cannot interpret helper errors as markup", () => {
+  const tooltip = Model.tooltip({
+    vaultStatus: "error",
+    busy: false,
+    lastError: "Unexpected <b>helper response</b>"
+  })
+  assert.equal(tooltip, "Needs attention · Unexpected ‹b›helper response‹/b›")
+  assert.doesNotMatch(tooltip, /[<>]/)
+})
+
 test("settings coercion is bounded and predictable", () => {
   assert.equal(Model.bool("TRUE", false), true)
   assert.equal(Model.bool("false", true), false)

@@ -60,7 +60,13 @@ function tooltip(service) {
   if (!service) return "Checking Bitwarden…"
   var label = statusLabel(service.vaultStatus)
   if (service.busy) return label + " · working…"
-  if (service.lastError) return label + " · " + service.lastError
+  if (service.lastError) {
+    // Omarchy 4.0.1's shared bar tooltip uses Text.AutoText. The helper emits
+    // bounded public errors, but neutralize markup at this final inherited
+    // rendering boundary as defense in depth.
+    return (label + " · " + service.lastError)
+      .replace(/</g, "‹").replace(/>/g, "›")
+  }
   return label
 }
 

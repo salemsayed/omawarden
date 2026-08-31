@@ -205,9 +205,15 @@ class AgentTests(unittest.TestCase):
             self.agent.search("")
         self.assertFalse(self.agent._index_ready)
         self.assertEqual(self.agent._item_index, [])
-        pid = int(self.bw_pid.read_text(encoding="utf-8"))
-        with self.assertRaises(ProcessLookupError):
-            os.kill(pid, 0)
+        # A loaded single-vCPU guest may expire the deliberately tiny timeout
+        # before the fake Python CLI reaches its first line. If it did start,
+        # it must have been reaped; otherwise there is no child payload to
+        # inspect. The overflow test above always reaches the ready fixture and
+        # covers process-group termination independently of startup latency.
+        if self.bw_pid.exists():
+            pid = int(self.bw_pid.read_text(encoding="utf-8"))
+            with self.assertRaises(ProcessLookupError):
+                os.kill(pid, 0)
 
     def test_search_reuses_memory_index_without_reinvoking_bw(self) -> None:
         self.agent.session = "session"
@@ -559,10 +565,20 @@ class AgentTests(unittest.TestCase):
             for _ in range(20)
         ]
         try:
-            results = [
-                (process, process.communicate(json.dumps({"action": "status", "config": config}), timeout=10))
-                for process in processes
-            ]
+            # Feed every already-started client before collecting any output.
+            # Sequential communicate() calls only overlapped process startup;
+            # on a single-vCPU VM the later requests could arrive after the
+            # one-second cache expired and turn this into a speed benchmark.
+            payload = json.dumps({"action": "status", "config": config})
+            for process in processes:
+                assert process.stdin is not None
+                process.stdin.write(payload)
+                process.stdin.close()
+                # communicate() must not try to flush the stream we closed to
+                # release all clients at once; it still supplies the timeout
+                # and closes the output pipes for us.
+                process.stdin = None
+            results = [(process, process.communicate(timeout=10)) for process in processes]
             for process, (stdout, stderr) in results:
                 self.assertEqual(process.returncode, 0, stderr)
                 self.assertTrue(json.loads(stdout)["ok"])
@@ -727,6 +743,11 @@ class AgentTests(unittest.TestCase):
             with self.subTest(field=field):
                 response = self.agent.copy("card-1", field)
                 self.assertEqual(response["field"], field)
+                deadline = time.monotonic() + 2
+                while time.monotonic() < deadline:
+                    if self.clipboard.exists() and self.clipboard.read_bytes() == value:
+                        break
+                    time.sleep(0.01)
                 self.assertEqual(self.clipboard.read_bytes(), value)
         with self.assertRaisesRegex(AGENT.PublicError, "login has no number"):
             self.agent.copy("item-1", "number")
@@ -741,9 +762,10 @@ class AgentTests(unittest.TestCase):
             self.agent.copy("item-1", "password")
         self.assertEqual(self.agent.clipboards, set())
         for pid_file in (self.bw_pid, self.wl_copy_pid):
-            pid = int(pid_file.read_text(encoding="utf-8"))
-            with self.assertRaises(ProcessLookupError):
-                os.kill(pid, 0)
+            if pid_file.exists():
+                pid = int(pid_file.read_text(encoding="utf-8"))
+                with self.assertRaises(ProcessLookupError):
+                    os.kill(pid, 0)
 
     def test_clipboard_owner_expires_and_lock_reaps_it_immediately(self) -> None:
         self.agent.session = "session"

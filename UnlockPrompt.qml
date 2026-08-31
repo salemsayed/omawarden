@@ -197,6 +197,7 @@ Item {
           spacing: Style.space(9)
 
           Text {
+            textFormat: Text.PlainText
             anchors.verticalCenter: parent.verticalCenter
             text: "󰌾"
             color: root.accent
@@ -205,6 +206,7 @@ Item {
           }
 
           Text {
+            textFormat: Text.PlainText
             anchors.verticalCenter: parent.verticalCenter
             text: "Unlock Bitwarden"
             color: root.foreground
@@ -215,6 +217,7 @@ Item {
         }
 
         Text {
+          textFormat: Text.PlainText
           width: parent.width
           text: root.errorText !== ""
             ? root.errorText

@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.1.2 - 2026-08-31
+
+- Render vault names, usernames, domains, and CLI-derived messages as literal
+  plain text so markup-shaped shared-vault data cannot be interpreted by the
+  shell, including helper errors routed through the shared Omarchy 4.0.1 bar
+  tooltip.
+- Make slow-process and concurrent-client regression tests deterministic on
+  the single-vCPU Omarchy compatibility VM.
+
 ## 1.1.1 - 2026-08-31
 
 - Bound and concurrently drain the secret-bearing `bw list items --raw`
