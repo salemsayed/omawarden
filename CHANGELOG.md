@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.1.1 - 2026-08-31
+
+- Bound and concurrently drain the secret-bearing `bw list items --raw`
+  streams, terminating the full CLI process group on timeout or overflow.
+- Discard captured vault bytes before reporting a generic failure so oversized
+  output cannot exhaust the long-lived agent or leak through an error.
+- Check every CI run against the current Omarchy Quattro manifest validator.
+
 ## 1.1.0 - 2026-08-25
 
 - Credit cards now appear beside logins and can be searched by name, brand,

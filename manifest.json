@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "io.github.salemsayed.omawarden",
   "name": "OmaWarden",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "author": "Salem Sayed",
   "license": "MIT",
   "description": "Bitwarden in the Omarchy bar: instant search, safe timed copies, lock and sync.",

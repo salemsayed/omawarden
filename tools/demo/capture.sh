@@ -21,7 +21,6 @@ export FAKE_BW_STATE=$STATE
 PANEL_GEOM=${PANEL_GEOM:-"1355,31 520x780"}
 GIF_GEOM=${GIF_GEOM:-"1355,31 520x700"}
 BAR_GEOM=${BAR_GEOM:-"1600,0 32x31"}
-MON=HDMI-A-1
 
 ipc() { omarchy-shell "$ID" "$@"; }
 shot() { # shot <name> [geometry]
@@ -143,7 +142,9 @@ gif() {
   ipc settings;           sleep 2.8     # settings page
   ipc close;              sleep 1.2
   touch "$frames/stop"; wait "$rec" || true
-  echo "frames: $(ls "$frames" | grep -c png)"
+  local frame_count
+  frame_count=$(find "$frames" -maxdepth 1 -type f -name 'f*.png' -printf '%f\n' | wc -l)
+  echo "frames: $frame_count"
 }
 
 case ${1:-} in

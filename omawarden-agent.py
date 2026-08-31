@@ -14,6 +14,7 @@ import fcntl
 import heapq
 import json
 import os
+import selectors
 import shlex
 import shutil
 import signal
@@ -34,10 +35,14 @@ PROTOCOL_VERSION = 1
 AGENT_IDLE_EXIT_SECONDS = 10 * 60
 CLIENT_IO_TIMEOUT_SECONDS = 3.0
 STATUS_CACHE_SECONDS = 1.0
+VAULT_LIST_TIMEOUT_SECONDS = 45.0
 COPY_TIMEOUT_SECONDS = 30.0
 MAX_REQUEST_BYTES = 128 * 1024
 MAX_RESPONSE_BYTES = 2 * 1024 * 1024
 MAX_MASTER_PASSWORD_BYTES = 16 * 1024
+MAX_VAULT_LIST_STDOUT_BYTES = 64 * 1024 * 1024
+MAX_VAULT_LIST_STDERR_BYTES = 128 * 1024
+CAPPED_OUTPUT_RETURN_CODE = 125
 MAX_ITEM_ID_CHARS = 128
 SAFE_URL_SCHEMES = {"http", "https"}
 LOGIN_COPY_FIELDS = {"password", "username", "totp"}
@@ -595,6 +600,100 @@ def _run_captured(
     return subprocess.CompletedProcess(argv, process.returncode, stdout, stderr)
 
 
+def _run_capped_vault_list(
+    argv: list[str], *, env: dict[str, str], timeout: float,
+) -> subprocess.CompletedProcess[bytes]:
+    """Capture a vault listing without allowing raw vault data to exhaust memory.
+
+    `bw list items --raw` contains every secret-bearing field before this agent
+    projects the response to metadata. Drain both pipes concurrently, stop the
+    whole child process group on either ceiling, and return a non-zero result
+    without preserving an unbounded tail for an error path to expose.
+    """
+    process = subprocess.Popen(
+        argv,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        env=env,
+        start_new_session=True,
+    )
+    if process.stdout is None or process.stderr is None:
+        _terminate_process(process)
+        raise RuntimeError("Couldn't capture Bitwarden vault output")
+    limits = {"stdout": MAX_VAULT_LIST_STDOUT_BYTES, "stderr": MAX_VAULT_LIST_STDERR_BYTES}
+    streams = {"stdout": process.stdout, "stderr": process.stderr}
+    buffers = {"stdout": bytearray(), "stderr": bytearray()}
+    selector = selectors.DefaultSelector()
+    for name, stream in streams.items():
+        selector.register(stream, selectors.EVENT_READ, name)
+
+    deadline = time.monotonic() + max(0.05, float(timeout))
+    exceeded = ""
+    timed_out = False
+    try:
+        while selector.get_map():
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                timed_out = True
+                _terminate_process(process)
+                break
+            for key, _ in selector.select(min(0.1, remaining)):
+                name = str(key.data)
+                remaining_bytes = limits[name] - len(buffers[name])
+                try:
+                    chunk = os.read(key.fd, min(64 * 1024, remaining_bytes + 1))
+                except OSError:
+                    chunk = b""
+                if not chunk:
+                    try:
+                        selector.unregister(key.fileobj)
+                    except (KeyError, ValueError):
+                        pass
+                    continue
+                if len(chunk) > remaining_bytes:
+                    if remaining_bytes > 0:
+                        buffers[name].extend(chunk[:remaining_bytes])
+                    exceeded = name
+                    _terminate_process(process)
+                    break
+                buffers[name].extend(chunk)
+            if exceeded:
+                break
+    finally:
+        selector.close()
+        for stream in streams.values():
+            try:
+                stream.close()
+            except OSError:
+                pass
+
+    if process.poll() is None:
+        _terminate_process(process)
+    try:
+        returncode = process.wait(timeout=1)
+    except subprocess.TimeoutExpired:
+        _terminate_process(process)
+        returncode = process.wait()
+    if exceeded:
+        # A capped prefix can still contain vault secrets. The failure response
+        # has no use for it, so release it before handing control back to the
+        # long-lived agent.
+        buffers["stdout"].clear()
+        buffers["stderr"].clear()
+        return subprocess.CompletedProcess(
+            argv, CAPPED_OUTPUT_RETURN_CODE, b"",
+            b"Bitwarden vault listing exceeded OmaWarden's safety limit",
+        )
+    if timed_out:
+        buffers["stdout"].clear()
+        buffers["stderr"].clear()
+        raise subprocess.TimeoutExpired(argv, timeout)
+    return subprocess.CompletedProcess(
+        argv, returncode, bytes(buffers["stdout"]), bytes(buffers["stderr"]),
+    )
+
+
 class Agent:
     def __init__(self) -> None:
         self.session = ""
@@ -672,9 +771,22 @@ class Agent:
         self._recent_ids = []
 
     def _load_index(self) -> None:
-        completed = self._bw("list", "items", "--raw", "--nointeraction", session=True, timeout=45)
+        argv = self.config.bw_argv() + ["list", "items", "--raw", "--nointeraction"]
         items: Any = None
+        completed: subprocess.CompletedProcess[bytes] | None = None
         try:
+            try:
+                completed = _run_capped_vault_list(
+                    argv,
+                    env=self.config.environment(self.session),
+                    timeout=VAULT_LIST_TIMEOUT_SECONDS,
+                )
+            except FileNotFoundError as exc:
+                raise PublicError("The Bitwarden CLI (bw) isn't installed") from exc
+            except subprocess.TimeoutExpired as exc:
+                raise PublicError("Bitwarden took too long to respond") from exc
+            if completed is None:
+                raise PublicError("Couldn't load the vault. Try syncing again.")
             items = self._json(completed, "Couldn't load the vault. Try syncing again.")
             metadata = project_item_metadata(items, self.config.show_usernames)
             self._item_index = build_search_index(metadata)
@@ -684,7 +796,9 @@ class Agent:
             # soon as the metadata projection is complete.
             if isinstance(items, list):
                 items.clear()
-            completed.stdout = b""
+            if completed is not None:
+                completed.stdout = b""
+                completed.stderr = b""
 
     def _warm_index(self) -> bool:
         """Best-effort index preparation that never turns a good sync into a failure."""

@@ -58,7 +58,10 @@ their background work reports ready; when sync is disabled, preparation
 starts only after the unlock password and its FIFO have been cleared. The
 metadata stays in memory for the life of the session and is wiped on lock,
 sign-out, profile change, privacy change and exit. It is never written to
-disk.
+disk. The raw `bw list items --raw` stdout and stderr streams are drained
+concurrently under fixed byte ceilings; exceeding either ceiling terminates
+the whole CLI process group before JSON projection and returns a generic error
+to the panel rather than CLI output.
 
 ### Recently used
 

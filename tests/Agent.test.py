@@ -51,6 +51,12 @@ if command == "status":
         "userEmail": "private@example.test"
     }))
 elif command == "list":
+    overflow_stream = os.environ.get("FAKE_BW_OVERSIZE_LIST_STREAM")
+    if overflow_stream:
+        stream = sys.stdout.buffer if overflow_stream == "stdout" else sys.stderr.buffer
+        while True:
+            stream.write(b"DO_NOT_LEAK_OVERSIZED_VAULT_OUTPUT" * 1024)
+            stream.flush()
     print(json.dumps([{
         "id": "item-1", "name": "Example", "favorite": True, "type": 1,
         "login": {
@@ -175,6 +181,33 @@ class AgentTests(unittest.TestCase):
         self.assertEqual(self.agent.search("card")["items"][0]["id"], "card-1")
         self.assertTrue(response["items"][0]["hasPassword"])
         self.assertNotIn("DO_NOT_LEAK", json.dumps(self.agent._item_index))
+
+    def test_oversized_vault_list_output_is_capped_and_its_process_is_terminated(self) -> None:
+        self.agent.session = "session"
+        for stream in ("stdout", "stderr"):
+            with self.subTest(stream=stream), \
+                 mock.patch.object(AGENT, "MAX_VAULT_LIST_STDOUT_BYTES", 4096), \
+                 mock.patch.object(AGENT, "MAX_VAULT_LIST_STDERR_BYTES", 4096), \
+                 mock.patch.dict(os.environ, {"FAKE_BW_OVERSIZE_LIST_STREAM": stream}):
+                with self.assertRaisesRegex(AGENT.PublicError, "Couldn't load the vault") as caught:
+                    self.agent.search("")
+                self.assertNotIn("DO_NOT_LEAK_OVERSIZED_VAULT_OUTPUT", str(caught.exception))
+                self.assertFalse(self.agent._index_ready)
+                pid = int(self.bw_pid.read_text(encoding="utf-8"))
+                with self.assertRaises(ProcessLookupError):
+                    os.kill(pid, 0)
+
+    def test_timed_out_vault_list_is_terminated_without_retaining_an_index(self) -> None:
+        self.agent.session = "session"
+        with mock.patch.object(AGENT, "VAULT_LIST_TIMEOUT_SECONDS", 0.05), \
+             mock.patch.dict(os.environ, {"FAKE_BW_DELAY_LIST": "5"}), \
+             self.assertRaisesRegex(AGENT.PublicError, "Bitwarden took too long"):
+            self.agent.search("")
+        self.assertFalse(self.agent._index_ready)
+        self.assertEqual(self.agent._item_index, [])
+        pid = int(self.bw_pid.read_text(encoding="utf-8"))
+        with self.assertRaises(ProcessLookupError):
+            os.kill(pid, 0)
 
     def test_search_reuses_memory_index_without_reinvoking_bw(self) -> None:
         self.agent.session = "session"
