@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.1.3 - 2026-09-09
+
+- Restore screen-lock protection on Omarchy 4.0.3 using a bounded, read-only compositor probe. Fail closed on unknown state and preserve lock events across in-flight native/Pinentry unlocks.
+- Add deterministic transition tests and isolated Quickshell integration tests with a fake vault.
+
 ## 1.1.2 - 2026-08-31
 
 - Render vault names, usernames, domains, and CLI-derived messages as literal

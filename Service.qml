@@ -68,8 +68,7 @@ Item {
   readonly property string appDataDir: String(setting("appDataDir", "")).slice(0, 4096)
   readonly property string configuredServerUrl: String(setting("serverUrl", "")).slice(0, 8192)
   readonly property string nativeUnlockMessage: "Enter your master password in the OmaWarden prompt"
-  readonly property var systemLockService: shell && typeof shell.serviceFor === "function"
-    ? shell.serviceFor("omarchy.lock") : null
+  readonly property alias screenLock: screenLockMonitor
 
   property string _statusInput: ""
   property string _searchInput: ""
@@ -123,7 +122,7 @@ Item {
   function search(query) {
     var clean = Model.sanitizeQuery(query)
     _desiredQuery = clean
-    if (!unlocked) {
+    if (!unlocked || (lockOnScreenLock && (!screenLock.unlocked || _screenLockPending))) {
       items = []
       activeQuery = clean
       return
@@ -153,6 +152,9 @@ Item {
 
   function runAction(action, extra) {
     if (actionBusy || helperPath === "") return false
+    if ((action === "unlock" && !screenLock.unlocked)
+        || (lockOnScreenLock && (action === "copy" || action === "open-url")
+          && (!screenLock.unlocked || _screenLockPending))) return false
     _pendingAction = action
     _actionInput = requestObject(action, extra || {})
     lastError = ""
@@ -168,6 +170,11 @@ Item {
   }
 
   function beginUnlock() {
+    if (!screenLock.unlocked || _screenLockPending) {
+      nativeUnlockCancelled()
+      lastError = "Unlock is unavailable while the screen is locked or its state cannot be checked"
+      return
+    }
     if (unlocked || vaultStatus !== "locked" || actionBusy) {
       nativeUnlockCancelled()
       return
@@ -201,7 +208,8 @@ Item {
     if (actionStatus === nativeUnlockMessage) actionStatus = ""
   }
 
-  function nativeUnlockComplete() {
+  function nativeUnlockComplete(screenLockObserved) {
+    if (lockOnScreenLock && screenLockObserved === true) _screenLockPending = true
     _unlockAfterStatus = false
     nativeUnlockPending = false
     vaultStatus = "unlocked"
@@ -211,8 +219,7 @@ Item {
     actionMessageTimer.restart()
     actionCompleted("unlock", true)
 
-    var screenLocked = systemLockService && systemLockService.locked === true
-    if (lockOnScreenLock && screenLocked) {
+    if (lockOnScreenLock && (!screenLock.unlocked || _screenLockPending)) {
       Qt.callLater(handleScreenLock)
       return
     }
@@ -224,24 +231,19 @@ Item {
   function logout() { runAction("logout") }
 
   function handleScreenLock() {
-    var shouldLock = Model.shouldLockForScreen(
-      lockOnScreenLock,
-      systemLockService ? systemLockService.locked === true : false,
-      unlocked
-    )
-    if (!shouldLock) {
+    if (!lockOnScreenLock) {
       _screenLockPending = false
       screenLockRetry.stop()
       return
     }
-    if (runAction("lock")) {
-      _screenLockPending = false
-      screenLockRetry.stop()
-      return
-    }
-    // Copy/sync may already own the action process. Keep retrying until the
-    // vault is relocked; a screen-lock event must not be silently dropped.
-    _screenLockPending = true
+    if (!screenLock.unlocked && (unlocked || nativeUnlockPending
+        || (actionBusy && _pendingAction === "unlock"))) _screenLockPending = true
+    if (!_screenLockPending) return
+    discardSearch()
+    _syncAfterUnlock = false
+    // Latch the event across busy requests and a subsequent screen unlock.
+    // A native unlock can still finish after its prompt has been hidden.
+    if (!actionBusy && !nativeUnlockPending) runAction("lock")
     screenLockRetry.restart()
   }
   function copy(item, field) {
@@ -355,10 +357,12 @@ Item {
     lastError = ""
     if (action === "copy") lastCopyField = String(parsed.field || "password")
     if (parsed.status) vaultStatus = String(parsed.status)
+    if (action === "lock") _screenLockPending = false
     if (!unlocked) items = []
     // A fresh unlock syncs in the background: the panel shows cached results
     // at once and refreshes them when the sync lands.
-    if (action === "unlock" && syncOnUnlock) _syncAfterUnlock = true
+    if (action === "unlock" && syncOnUnlock && !_screenLockPending
+        && (!lockOnScreenLock || screenLock.unlocked)) _syncAfterUnlock = true
     actionMessageTimer.restart()
     actionCompleted(action, true)
     Qt.callLater(handleScreenLock)
@@ -370,12 +374,12 @@ Item {
     refreshTimer.restart()
     Qt.callLater(handleScreenLock)
   }
-  onSystemLockServiceChanged: Qt.callLater(handleScreenLock)
   onLockOnScreenLockChanged: Qt.callLater(handleScreenLock)
 
-  Connections {
-    target: root.systemLockService
-    function onLockedChanged() { root.handleScreenLock() }
+  ScreenLockMonitor {
+    id: screenLockMonitor
+    // Let the derived `unlocked` binding update before applying the policy.
+    onStateChanged: Qt.callLater(root.handleScreenLock)
   }
 
   Timer {

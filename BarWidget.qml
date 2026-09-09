@@ -31,7 +31,7 @@ BarWidget {
     if ("anchorItem" in target) target.anchorItem = button
     if ("hostWidget" in target) target.hostWidget = root
     if (target.service && typeof target.service.refresh === "function") target.service.refresh()
-    if (unlockLoader.item) unlockLoader.item.shell = root.bar ? root.bar.shell : null
+    if (unlockLoader.item) unlockLoader.item.screenLock = root.service ? root.service.screenLock : null
   }
 
   function open() { if (panelLoader.item) panelLoader.item.open() }
@@ -99,8 +99,8 @@ BarWidget {
 
   Connections {
     target: unlockLoader.item
-    function onUnlockSucceeded() {
-      if (root.service) root.service.nativeUnlockComplete()
+    function onUnlockSucceeded(screenLockObserved) {
+      if (root.service) root.service.nativeUnlockComplete(screenLockObserved)
     }
     function onUnlockCancelled() {
       if (root.service) root.service.nativeUnlockCancelled()
@@ -130,6 +130,7 @@ BarWidget {
     function lock(): string { if (root.service) root.service.lock(); return "ok" }
     function unlock(): string { if (root.service) root.service.unlock(); return "ok" }
     function status(): string { return root.service ? root.service.statusText : "Checking…" }
+    function screenLockState(): string { return root.service ? root.service.screenLock.state : "unknown" }
   }
 
   QtObject {

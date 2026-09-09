@@ -23,7 +23,7 @@ test("native unlock is widget-owned so panel hotkeys cannot summon it", () => {
   assert.match(barSource, /source: Qt\.resolvedUrl\("UnlockPrompt\.qml"\)/)
   assert.match(panelSource, /root\.hostWidget\.openUnlock\(config/)
   assert.match(promptSource, /PanelWindow \{/)
-  assert.match(promptSource, /signal unlockSucceeded\(\)/)
+  assert.match(promptSource, /signal unlockSucceeded\(bool screenLockObserved\)/)
   assert.match(promptSource, /signal unlockCancelled\(\)/)
   assert.match(promptSource, /password: true/)
   assert.match(promptSource, /maximumLength: 16384/)
@@ -32,7 +32,7 @@ test("native unlock is widget-owned so panel hotkeys cannot summon it", () => {
   assert.match(promptSource, /write\(secret\)[\s\S]*secret = ""[\s\S]*stdinEnabled = false/)
   assert.doesNotMatch(promptSource, /environment\s*:/)
   assert.doesNotMatch(promptSource, /omarchy-shell/)
-  assert.match(barSource, /root\.service\.nativeUnlockComplete\(\)/)
+  assert.match(barSource, /root\.service\.nativeUnlockComplete\(screenLockObserved\)/)
   assert.match(barSource, /root\.service\.nativeUnlockCancelled\(\)/)
 })
 
@@ -115,7 +115,7 @@ test("desktop launch reports helper failure through a managed process", () => {
 
 test("native unlock only closes the panel after the prompt opens", () => {
   assert.match(promptSource, /function open\(payloadJson\)[\s\S]*unlockProcess\.running\) return false/)
-  assert.match(promptSource, /lockService\.locked === true\) return false/)
+  assert.match(promptSource, /if \(!screenUnlocked\) return false/)
   assert.match(promptSource, /opened = true[\s\S]*return true/)
   assert.match(barSource, /var opened = unlockLoader\.item\.open\([\s\S]*if \(opened === true\) root\.close\(\)[\s\S]*return opened === true/)
 })

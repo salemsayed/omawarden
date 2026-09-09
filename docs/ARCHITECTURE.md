@@ -34,15 +34,21 @@ action processes keep the bar responsive while preventing duplicate actions.
 Search input uses a short debounce and coalesces in-flight requests without
 presenting stale results. After a successful unlock it triggers the sync
 itself; that background action prepares the metadata index before reporting
-completion, so the first panel search is warm. It also observes Omarchy's
-native lock service and reliably queues a vault lock when the screen locks.
+completion, so the first panel search is warm. `ScreenLockMonitor.qml` checks
+the compositor through `omarchy-hyprland-session-locked` every 500 ms with a
+one-second process timeout. It uses no private shell authentication objects.
+Unknown, failed, or stale results block unlocking; with screen-lock protection
+enabled they also queue a vault lock. A lock event stays pending across busy
+operations and a later desktop unlock until the vault lock succeeds.
 
 `UnlockPrompt.qml` is the native unlock overlay, privately owned by the bar
 widget rather than advertised as another plugin kind. This keeps Omarchy's
 numbered bar-panel routing pointed at the vault panel. The prompt takes
 exclusive keyboard focus and hands the password to
 `omawarden-agent.py unlock-stdin` over stdin. It clears its field on submit,
-dismiss, and session lock.
+dismiss, and session lock. An in-flight native unlock may finish after its
+surface closes; its completion carries the observed lock event so the service
+relocks the vault even if the desktop has since been unlocked again.
 
 `omawarden-agent.py` is standard-library Python. The short-lived `request`
 mode starts or connects to a long-lived per-user agent; `unlock-stdin` does

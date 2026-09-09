@@ -215,3 +215,11 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) and
 ## License
 
 [MIT](LICENSE)
+
+### Omarchy 4.0.3 screen-lock integration
+
+Screen-lock protection uses the read-only compositor checker shipped with
+Omarchy, polled every 500 ms. Unknown or failed checks block unlocking and,
+when screen-lock protection is enabled, relock the vault. A lock that occurs
+during an unlock or sync remains pending until the vault is locked. The plugin
+does not access the shell’s private lock or authentication objects.

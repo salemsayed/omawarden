@@ -11,12 +11,13 @@ else
   echo "Skipping Omarchy manifest validation (omarchy is not installed)"
 fi
 if command -v qmlformat >/dev/null 2>&1; then
-  for qml_file in BarWidget.qml Service.qml Panel.qml UnlockPrompt.qml; do
+  for qml_file in BarWidget.qml Service.qml Panel.qml UnlockPrompt.qml ScreenLockMonitor.qml; do
     qmlformat "$qml_file" >/dev/null
   done
 fi
-node --test tests/Model.test.js tests/IpcLifecycle.test.js
+node --test tests/Model.test.js tests/IpcLifecycle.test.js tests/ScreenLock.test.js
 python3 tests/Agent.test.py
 python3 tests/Manifest.test.py
+python3 -B tests/ScreenLockQml.test.py
 
 echo "All OmaWarden tests passed"

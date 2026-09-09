@@ -10,16 +10,16 @@ import qs.Ui
 Item {
   id: root
 
-  property var shell: null
+  property var screenLock: null
   property bool opened: false
   property bool busy: false
   property string errorText: ""
   property var unlockConfig: ({})
+  property bool cancelledForLock: false
 
   readonly property string helperPath: decodeURIComponent(
     String(Qt.resolvedUrl("omawarden-agent.py")).replace("file://", ""))
-  readonly property var lockService: shell && typeof shell.serviceFor === "function"
-    ? shell.serviceFor("omarchy.lock") : null
+  readonly property bool screenUnlocked: screenLock && screenLock.unlocked === true
 
   readonly property color background: Color.menu.background
   readonly property color foreground: Color.menu.text
@@ -33,7 +33,7 @@ Item {
   readonly property int cardWidth: Math.min(
     Style.space(390), panel.width - Style.gapsOut * 2)
 
-  signal unlockSucceeded()
+  signal unlockSucceeded(bool screenLockObserved)
   signal unlockCancelled()
 
   function parsePayload(payloadJson) {
@@ -47,7 +47,8 @@ Item {
 
   function open(payloadJson) {
     if (unlockProcess.running) return false
-    if (lockService && lockService.locked === true) return false
+    if (!screenUnlocked) return false
+    cancelledForLock = false
     unlockConfig = parsePayload(payloadJson)
     errorText = ""
     busy = false
@@ -80,6 +81,7 @@ Item {
 
   function submit() {
     if (busy) return
+    if (!screenUnlocked) { cancelForScreenLock(); return }
     if (passwordField.text.length === 0) {
       errorText = "Enter your master password"
       passwordField.forceActiveFocus()
@@ -104,6 +106,7 @@ Item {
     }
     busy = false
     if (!response.ok) {
+      if (cancelledForLock) { unlockCancelled(); return }
       errorText = String(response.error || "That master password didn't work")
       Qt.callLater(function() {
         if (root.opened) passwordField.forceActiveFocus()
@@ -111,18 +114,20 @@ Item {
       return
     }
 
-    unlockSucceeded()
+    unlockSucceeded(cancelledForLock || !screenUnlocked)
     close()
   }
 
-  Connections {
-    target: root.lockService
-    function onLockedChanged() {
-      if (!root.lockService || root.lockService.locked !== true) return
-      root.close()
-      root.unlockCancelled()
-    }
+  function cancelForScreenLock() {
+    if (!opened && !busy) return
+    cancelledForLock = true
+    close()
+    // Do not tell the service an in-flight unlock is over until it finishes.
+    // Its latched lock request must run after, not before, that operation.
+    if (!busy) unlockCancelled()
   }
+
+  onScreenUnlockedChanged: if (!screenUnlocked) cancelForScreenLock()
 
   Process {
     id: unlockProcess
