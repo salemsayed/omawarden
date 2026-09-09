@@ -2,12 +2,12 @@
 """Run the actual QML service and probe against an isolated fake vault/compositor."""
 import json
 import os
-from pathlib import Path
 import shutil
 import subprocess
 import tempfile
 import time
 import unittest
+from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 QS = shutil.which("qs")
@@ -107,7 +107,7 @@ esac
 
     def call(self, method):
         return subprocess.run([QS, "ipc", "-p", str(self.config), "call", "test", method],
-                              env=self.env, text=True, capture_output=True, timeout=3)
+                              env=self.env, text=True, capture_output=True, timeout=3, check=False)
 
     def snapshot(self):
         result = self.call("snapshot")

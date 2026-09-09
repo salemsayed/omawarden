@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.1.4 - 2026-09-09
+
+- Make the new QML screen-lock test satisfy the repository’s executable-file, import-order, and subprocess lint rules. Runtime behavior is unchanged from 1.1.3.
+
 ## 1.1.3 - 2026-09-09
 
 - Restore screen-lock protection on Omarchy 4.0.3 using a bounded, read-only compositor probe. Fail closed on unknown state and preserve lock events across in-flight native/Pinentry unlocks.
