@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.1.6 - 2026-09-15
+
+- The README now shows a card search, the native unlock prompt and, in the
+  demo GIF, a copy with its countdown. It documents command-mode keys and
+  the `screenLockState` IPC call, and explains screen-lock protection under
+  Security. Runtime behavior is unchanged from 1.1.5.
+- `tools/demo` can capture the card and native prompt shots, and press Enter
+  in a disposable VM to record a copy.
+
 ## 1.1.5 - 2026-09-15
 
 - The bar icon and panel badges now show a closed padlock while the vault

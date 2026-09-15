@@ -10,16 +10,16 @@ Regenerate with `tools/demo/social.py`.
 Press `/`, type a few letters, press Enter, and the password is on your clipboard for
 thirty seconds — never in Omarchy's clipboard history, never in the shell.
 
-- Instant, ranked search of your logins
-- Passwords, usernames and one-time codes on a self-clearing clipboard
-- Pinentry unlock, locks with the screen, sync with a keystroke
+- Instant, ranked search of your logins and cards
+- Passwords, one-time codes and card details on a self-clearing clipboard
+- Pinentry or a native Omarchy unlock prompt, locks with the screen, sync with a keystroke
 - Self-hosted and EU servers, multiple accounts
 
 ```bash
 omarchy plugin add https://github.com/salemsayed/omawarden.git --enable
 ```
 
-Marketplace (Verified): https://omarchyplugins.com/plugin.html?id=io.github.salemsayed.omawarden
+Marketplace: https://omarchyplugins.com/plugin.html?id=io.github.salemsayed.omawarden
 Source: https://github.com/salemsayed/omawarden
 
 ## Tweet

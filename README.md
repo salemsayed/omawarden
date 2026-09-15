@@ -6,13 +6,15 @@ seconds — never in Omarchy's clipboard history, never in the shell.
 
 ## Demo
 
-![OmaWarden demo: unlock, browse, search, settings](docs/images/demo.gif)
+![OmaWarden demo: unlock, search, copy, find a card, settings](docs/images/demo.gif)
 
 ## Screenshots
 
-![Browsing the vault: favourites first, then every login](docs/images/panel-vault.png)
+![Browsing the vault: favourites first, then every login and card](docs/images/panel-vault.png)
 
 ![Searching "git": GitHub, Gitea and DigitalOcean, ranked](docs/images/panel-search.png)
+
+![Searching "visa": a card with number, cardholder, security code and expiry actions](docs/images/panel-card.png)
 
 ![Settings: locking, clipboard, account, advanced](docs/images/panel-settings.png)
 
@@ -30,9 +32,11 @@ The bar icon, locked, unlocked and needing attention:
   usernames and sites plus card names, brands and last four digits. Results
   are ranked — `git` finds *GitHub* before *DigitalOcean* — and the panel
   opens on what you used last.
-- **Safe.** The shell only ever sees names, usernames and sites. Passwords,
-  one-time codes and the session key stay in a small per-user helper and go
-  from the Bitwarden CLI straight to a sensitive, self-clearing clipboard.
+- **Safe.** The shell only ever sees names, usernames, sites, cardholders,
+  card brands and last four digits. Passwords, one-time codes, card numbers
+  and security codes go from the Bitwarden CLI straight to a sensitive,
+  self-clearing clipboard, and the session key never leaves a small per-user
+  helper.
 - **Keyboard first.** The panel opens in command mode; `/` or `Ctrl+F` enters
   search mode. `Enter` copies the primary value, `Shift+Enter` the alternate,
   and the Ctrl shortcuts reach passwords, usernames, card fields, one-time
@@ -83,8 +87,9 @@ Unavailable fields appear faintly on the selected row.
 | `Ctrl+,` | Settings |
 | `Esc` | Clear search, leave search mode, then close |
 
-While the vault is locked: `Enter` unlocks, `r` refreshes, `s` opens
-settings, `d` opens the desktop app.
+In command mode, before you press `/`: `Enter` copies, `r` syncs, `s` opens
+settings and `d` opens the desktop app. While the vault is locked: `Enter`
+or `u` unlocks, `r` refreshes, `s` opens settings, `d` opens the desktop app.
 
 Each copy shows a countdown. The clipboard clears after 30 seconds, or the
 moment you lock.
@@ -130,6 +135,8 @@ omarchy bar set io.github.salemsayed.omawarden defaultCopy Username
   screen. The password is handed to the helper over a private pipe and
   cleared at once. Pick this for looks; Pinentry for isolation.
 
+![The native unlock prompt](docs/images/unlock-native.png)
+
 ### Self-hosted, EU and multiple accounts
 
 Set **Server URL** before you sign in; it is applied as part of sign-in.
@@ -157,15 +164,15 @@ omarchy-shell io.github.salemsayed.omawarden lock
 omarchy-shell io.github.salemsayed.omawarden sync
 ```
 
-Also `open`, `close`, `toggle`, `settings`, `unlock`, `refresh`, `status`.
-There is no `copy` over IPC, on purpose.
+Also `open`, `close`, `toggle`, `settings`, `unlock`, `refresh`, `status`
+and `screenLockState`. There is no `copy` over IPC, on purpose.
 
 ## Security
 
-- The panel receives names, usernames, sites, card brands and last four
-  digits, plus capability flags — never passwords, full card numbers,
-  security codes, one-time-code seeds, notes or custom fields. Identities and
-  notes are not listed.
+- The panel receives names, usernames, sites, cardholder names, card brands
+  and last four digits, plus capability flags — never passwords, full card
+  numbers, security codes, one-time-code seeds, notes or custom fields.
+  Identities and notes are not listed.
 - The session key lives only in the helper's memory and reaches `bw`
   through its environment, never its arguments.
 - The helper listens on a user-only Unix socket in a private runtime
@@ -174,6 +181,12 @@ There is no `copy` over IPC, on purpose.
   is cleared at the deadline, on a new copy, and on lock.
 - Only `http` and `https` sites from your own vault entries can be opened.
 - The index is memory-only and wiped on lock, sign-out and exit.
+- Unlocking only starts while Omarchy reports the screen as unlocked, read
+  from its compositor lock check every 500 ms. With **Lock when the screen
+  locks** on, a locked, unknown or failed check also locks the vault and
+  blocks copies; a screen lock during an unlock or sync locks the vault as
+  soon as that finishes. OmaWarden never touches the shell's private lock
+  or authentication objects.
 
 [SECURITY.md](SECURITY.md) has the threat model and how to report a
 vulnerability. Like any desktop integration, OmaWarden cannot protect you
@@ -188,6 +201,10 @@ from malware already running as your user.
 - **Unlock takes a moment on a large vault** — OmaWarden prepares its
   memory-only search index before the background sync reports that it is done.
   Once ready, opening and searching do not rerun that cold load.
+- **"Unlock is unavailable while the screen is locked or its state cannot be
+  checked"** — OmaWarden only unlocks while Omarchy reports the screen as
+  unlocked; `omarchy-shell io.github.salemsayed.omawarden screenLockState`
+  shows what it sees.
 - **The helper won't start** — `python3 omawarden-agent.py request` prints
   the reason.
 
@@ -204,22 +221,15 @@ CLI out; run `bw logout` for that.
 ## Development
 
 ```bash
-tests/run                    # agent, model and manifest tests
+tests/run                    # agent, model, manifest and QML screen-lock tests
 python3 tests/benchmark.py   # 10k-login search benchmark
 omarchy plugin validate .
 ```
 
+Screenshots and the demo GIF come from [tools/demo](tools/demo/README.md).
 See [CONTRIBUTING.md](CONTRIBUTING.md) and
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## License
 
 [MIT](LICENSE)
-
-### Omarchy 4.0.3 screen-lock integration
-
-Screen-lock protection uses the read-only compositor checker shipped with
-Omarchy, polled every 500 ms. Unknown or failed checks block unlocking and,
-when screen-lock protection is enabled, relock the vault. A lock that occurs
-during an unlock or sync remains pending until the vault is locked. The plugin
-does not access the shell’s private lock or authentication objects.

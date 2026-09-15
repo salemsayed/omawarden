@@ -1,11 +1,17 @@
 #!/bin/bash
 # Drive the OmaWarden panel over IPC against the fake bw and capture
-# screenshots + a demo GIF. Never injects keyboard or mouse input.
+# screenshots + a demo GIF. Injects no keyboard or mouse input unless
+# DEMO_KEYS=1.
 #
 #   capture.sh setup      switch the widget to the fake CLI (drops the real session!)
 #   capture.sh shots      take the state screenshots into $OUT
+#   capture.sh prompt     screenshot the native unlock prompt, then leave it open
 #   capture.sh gif        record the demo GIF into $OUT
 #   capture.sh restore    put the widget back on the real bw
+#
+# DEMO_KEYS=1 makes the GIF press Enter with wtype to show a copy and its
+# countdown. The key goes to whatever has focus, so only use it in a
+# disposable VM, never on a desktop with other windows open.
 
 set -euo pipefail
 
@@ -79,8 +85,10 @@ shots() {
   ipc open; sleep 2.2; shot panel-vault
   ipc close; sleep 0.5
 
-  # 3. Ranked search
+  # 3. Ranked search, then a card found by its brand
   ipc search "git"; sleep 1.6; shot panel-search
+  ipc close; sleep 0.5
+  ipc search "visa"; sleep 1.6; shot panel-card
   ipc close; sleep 0.5
 
   # 4. Settings (show the defaults rather than the demo helper paths)
@@ -107,6 +115,19 @@ shots() {
   ipc close; sleep 0.5
   omarchy bar set "$ID" cliCommand "$HERE/bw"; sleep 0.6
   state locked; ipc refresh; wait_status "locked"
+}
+
+# The native prompt covers the screen and closes only on Esc, a click outside
+# it or a password, so it stays open for you to dismiss.
+prompt() {
+  mkdir -p "$OUT"
+  ipc close; sleep 0.4
+  state locked; ipc lock >/dev/null; sleep 1.0; ipc refresh; wait_status "locked"
+  omarchy bar set "$ID" unlockPrompt Native >/dev/null; sleep 0.8
+  ipc unlock >/dev/null; sleep 1.5
+  grim "$OUT/unlock-native.png"
+  echo "shot unlock-native; press Esc to close the prompt"
+  omarchy bar set "$ID" unlockPrompt Pinentry >/dev/null
 }
 
 # Frame recorder: grim as fast as it goes into $1 until $1/stop exists.
@@ -141,8 +162,10 @@ gif() {
   ipc search "g";         sleep 1.1
   ipc search "gi";        sleep 1.0
   ipc search "git";       sleep 2.4     # ranked matches
-  ipc search "";          sleep 1.6
-  ipc search "hetz";      sleep 2.2
+  if [[ ${DEMO_KEYS:-0} == 1 ]]; then
+    wtype -k Return;      sleep 3.2     # copy, with the clipboard countdown
+  fi
+  ipc search "visa";      sleep 2.6     # a card, found by its brand
   ipc settings;           sleep 2.8     # settings page
   ipc close;              sleep 1.2
   touch "$frames/stop"; wait "$rec" || true
@@ -155,7 +178,8 @@ gif() {
 case ${1:-} in
   setup) setup ;;
   shots) shots ;;
+  prompt) prompt ;;
   gif) gif ;;
   restore) restore ;;
-  *) echo "usage: $0 setup|shots|gif|restore" >&2; exit 2 ;;
+  *) echo "usage: $0 setup|shots|prompt|gif|restore" >&2; exit 2 ;;
 esac

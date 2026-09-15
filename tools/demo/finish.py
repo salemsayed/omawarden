@@ -19,6 +19,9 @@ DEST = Path(sys.argv[2]) if len(sys.argv) > 2 else HERE / "final"
 # PANEL_BORDER names another theme's accent.
 _border = os.environ.get("PANEL_BORDER", "7aa2f7").lstrip("#")
 BORDER = (int(_border[0:2], 16), int(_border[2:4], 16), int(_border[4:6], 16))
+# The native unlock prompt draws its border in the theme's foreground colour.
+_prompt_border = os.environ.get("PROMPT_BORDER", "a9b1d6").lstrip("#")
+PROMPT_BORDER = (int(_prompt_border[0:2], 16), int(_prompt_border[2:4], 16), int(_prompt_border[4:6], 16))
 CANVAS_BG = "#0f1117"
 
 
@@ -26,8 +29,8 @@ def run(*argv: str, **kw) -> subprocess.CompletedProcess:
     return subprocess.run([str(a) for a in argv], check=True, text=True, capture_output=True, **kw)
 
 
-def column(path: Path, x: int) -> list[tuple[int, int, int]]:
-    txt = run("magick", path, "-crop", f"1x+{x}+0", "+repage", "-depth", "8", "txt:-").stdout
+def pixels(path: Path, crop: str) -> list[tuple[int, int, int]]:
+    txt = run("magick", path, "-crop", crop, "+repage", "-depth", "8", "txt:-").stdout
     rows: list[tuple[int, int, int]] = []
     for line in txt.splitlines()[1:]:
         m = re.match(r"\d+,\d+: \((\d+),(\d+),(\d+)", line)
@@ -36,8 +39,12 @@ def column(path: Path, x: int) -> list[tuple[int, int, int]]:
     return rows
 
 
-def is_border(c: tuple[int, int, int]) -> bool:
-    return sum(abs(a - b) for a, b in zip(c, BORDER)) < 60
+def column(path: Path, x: int) -> list[tuple[int, int, int]]:
+    return pixels(path, f"1x+{x}+0")
+
+
+def is_border(c: tuple[int, int, int], border: tuple[int, int, int] = BORDER) -> bool:
+    return sum(abs(a - b) for a, b in zip(c, border)) < 60
 
 
 def panel_bottom(path: Path) -> int | None:
@@ -58,6 +65,19 @@ def trim_shot(src: Path, dst: Path) -> None:
         raise SystemExit(f"no panel border found in {src}")
     run("magick", src, "-crop", f"520x{bottom + 1}+0+0", "+repage", dst)
     print(f"{dst.name}: 520x{bottom + 1}")
+
+
+def trim_prompt(src: Path, dst: Path) -> None:
+    """Crop a full-screen capture to the centred native prompt's border."""
+    width, height = (int(v) for v in run("magick", "identify", "-format", "%w %h", src).stdout.split())
+    # Rows under 40 px belong to the bar, whose clock shares the colour.
+    ys = [y for y, c in enumerate(column(src, width // 2)) if y >= 40 and is_border(c, PROMPT_BORDER)]
+    xs = [x for x, c in enumerate(pixels(src, f"x1+0+{height // 2}")) if is_border(c, PROMPT_BORDER)]
+    if not ys or not xs:
+        raise SystemExit(f"no prompt border found in {src}")
+    size = f"{xs[-1] - xs[0] + 1}x{ys[-1] - ys[0] + 1}"
+    run("magick", src, "-crop", f"{size}+{xs[0]}+{ys[0]}", "+repage", dst)
+    print(f"{dst.name}: {size}")
 
 
 def build_gif(frames_dir: Path, dst: Path, canvas_h: int = 700) -> None:
@@ -158,10 +178,12 @@ def preview_card(dst: Path, front: Path, back: Path) -> None:
 
 def main() -> None:
     DEST.mkdir(parents=True, exist_ok=True)
-    for name in ("panel-locked", "panel-vault", "panel-search", "panel-settings", "panel-signin", "panel-setup"):
+    for name in ("panel-locked", "panel-vault", "panel-search", "panel-card", "panel-settings", "panel-signin", "panel-setup"):
         src = OUT / f"{name}.png"
         if src.exists():
             trim_shot(src, DEST / f"{name}.png")
+    if (OUT / "unlock-native.png").exists():
+        trim_prompt(OUT / "unlock-native.png", DEST / "unlock-native.png")
     if (OUT / "frames" / "times.txt").exists():
         build_gif(OUT / "frames", DEST / "demo.gif")
     bar_strip(DEST / "bar-states.png")

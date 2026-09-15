@@ -104,6 +104,7 @@ class ManifestTests(unittest.TestCase):
             ("preview.png", 1200, 750),
             ("docs/images/panel-vault.png", 480, 480),
             ("docs/images/panel-search.png", 480, 240),
+            ("docs/images/panel-card.png", 480, 180),
             ("docs/images/panel-settings.png", 480, 480),
             ("docs/images/onboarding.png", 1200, 400),
         ):
@@ -114,6 +115,11 @@ class ManifestTests(unittest.TestCase):
                 width, height = struct.unpack(">II", stream.read(min(length, 8)))
             self.assertGreaterEqual(width, minimum_width, relative)
             self.assertGreaterEqual(height, minimum_height, relative)
+        readme = (ROOT / "README.md").read_text(encoding="utf-8")
+        images = re.findall(r"!\[[^\]]*\]\(([^)]+)\)", readme)
+        self.assertTrue(images)
+        for relative in images:
+            self.assertTrue((ROOT / relative).is_file(), relative)
 
     def test_release_tree_has_no_symlinks_or_unsafe_executables(self) -> None:
         symlinks = [path for path in ROOT.rglob("*") if ".git" not in path.parts and path.is_symlink()]

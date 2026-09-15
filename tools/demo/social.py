@@ -21,8 +21,8 @@ W, H = 1600, 900
 FG, DIM, FAINT, ACCENT = "#e7e9f0", "#9aa3b5", "#6b7487", "#5b8cff"
 INSTALL = "omarchy plugin add https://github.com/salemsayed/omawarden.git --enable"
 HIGHLIGHTS = [
-    "Instant, ranked search of your logins",
-    "Passwords, usernames and one-time codes on a",
+    "Instant, ranked search of logins and cards",
+    "Passwords, one-time codes and card details on a",
     "self-clearing clipboard, never in history",
     "Vault secrets never touch the shell",
 ]
