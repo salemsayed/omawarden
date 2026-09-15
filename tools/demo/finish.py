@@ -5,6 +5,7 @@ marketplace preview card. ImageMagick + ffmpeg only (no PIL on this box)."""
 
 from __future__ import annotations
 
+import os
 import re
 import shutil
 import subprocess
@@ -14,7 +15,10 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 OUT = Path(sys.argv[1]) if len(sys.argv) > 1 else HERE / "out"
 DEST = Path(sys.argv[2]) if len(sys.argv) > 2 else HERE / "final"
-BORDER = (30, 102, 245)  # the panel's accent border at 1x
+# The panel's accent border at 1x: Omarchy's default Tokyo Night unless
+# PANEL_BORDER names another theme's accent.
+_border = os.environ.get("PANEL_BORDER", "7aa2f7").lstrip("#")
+BORDER = (int(_border[0:2], 16), int(_border[2:4], 16), int(_border[4:6], 16))
 CANVAS_BG = "#0f1117"
 
 
@@ -39,6 +43,9 @@ def is_border(c: tuple[int, int, int]) -> bool:
 def panel_bottom(path: Path) -> int | None:
     """Last row of the panel's left border (x=1), or None when no panel shows."""
     rows = column(path, 1)
+    # A panel fading in or out blends its border with the desktop behind it.
+    if len(rows) < 3 or sum(abs(a - b) for a, b in zip(rows[2], BORDER)) > 24:
+        return None
     hits = [y for y, c in enumerate(rows) if is_border(c)]
     if len(hits) < 40 or hits[0] > 6:
         return None

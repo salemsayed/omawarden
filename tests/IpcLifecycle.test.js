@@ -16,6 +16,19 @@ test("bar and panel IPC wait for a relocated slot to retire", () => {
   assert.match(panelSource, /IpcHandler \{\s+enabled: root\.hostWidget && root\.hostWidget\.ipcRegistrationReady === true\s+target: root\.ipcTarget/)
 })
 
+test("state badges and action buttons use their own lock icons", () => {
+  assert.match(barSource, /Model\.statusGlyph\(root\.state\)/)
+  assert.match(panelSource, /glyph: Model\.statusGlyph\(root\.displayStatus\)/)
+  assert.match(panelSource, /glyph: root\.gate\.glyph/)
+  assert.match(panelSource, /iconText: root\.gate\.buttonGlyph/)
+  assert.match(panelSource, /iconText: "\u{F033E}"\s+tooltipText: "Lock vault/u)
+  assert.match(promptSource, /text: "\u{F033E}"/u)
+})
+
+test("an empty search shows a no-results magnifier", () => {
+  assert.match(panelSource, /root\.browsing \? "\u{F0349}" : "\u{F0980}"/u) // nf-md-magnify, nf-md-magnify_close
+})
+
 test("native unlock is widget-owned so panel hotkeys cannot summon it", () => {
   assert.deepEqual(manifest.kinds, ["bar-widget"])
   assert.equal(manifest.entryPoints.overlay, undefined)

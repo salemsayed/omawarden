@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.1.5 - 2026-09-15
+
+- The bar icon and panel badges now show a closed padlock while the vault
+  is locked and an open one while it is unlocked; the two were swapped. The
+  open padlock swings its shackle wide so it stays distinct at bar size, and
+  the Unlock vault button uses it too.
+- Copy card number shows a card instead of an empty circle, and a search
+  with no matches shows a crossed-out magnifier instead of an envelope.
+- Screenshots, the demo GIF and the preview images are retaken on a stock
+  Omarchy 4.0.3 desktop.
+
 ## 1.1.4 - 2026-09-09
 
 - Make the new QML screen-lock test satisfy the repository’s executable-file, import-order, and subprocess lint rules. Runtime behavior is unchanged from 1.1.3.

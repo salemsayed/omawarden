@@ -15,12 +15,13 @@ OUT=${OUT:-$HERE/out}
 STATE=$HERE/state.json
 export FAKE_BW_STATE=$STATE
 
-# Panel geometry on a 1920x1080 display with the widget at the right of a top
-# bar. Probe once with a wide grim capture, then override PANEL_GEOM, GIF_GEOM
-# and BAR_GEOM for other layouts.
-PANEL_GEOM=${PANEL_GEOM:-"1355,31 520x780"}
-GIF_GEOM=${GIF_GEOM:-"1355,31 520x700"}
-BAR_GEOM=${BAR_GEOM:-"1600,0 32x31"}
+# Panel geometry on a stock Omarchy 4.0.3 desktop at 1920x1080, with the
+# widget in its default place on the right of the bar. Probe once with a wide
+# grim capture, then override PANEL_GEOM, GIF_GEOM and BAR_GEOM for other
+# layouts.
+PANEL_GEOM=${PANEL_GEOM:-"1395,31 520x780"}
+GIF_GEOM=${GIF_GEOM:-"1395,31 520x700"}
+BAR_GEOM=${BAR_GEOM:-"1802,0 32x26"}
 
 ipc() { omarchy-shell "$ID" "$@"; }
 shot() { # shot <name> [geometry]
@@ -133,7 +134,10 @@ gif() {
   sleep 0.8
   ipc open;               sleep 2.2     # locked gate
   ipc unlock;             sleep 0.3     # "Waiting for your master password…"
-  wait_status "unlocked" 15; sleep 2.6  # vault list appears
+  wait_status "unlocked" 15
+  # The settings page should show the default, not the demo helper path.
+  omarchy bar set "$ID" pinentryCommand auto >/dev/null
+  sleep 2.6                             # vault list appears
   ipc search "g";         sleep 1.1
   ipc search "gi";        sleep 1.0
   ipc search "git";       sleep 2.4     # ranked matches
@@ -142,6 +146,7 @@ gif() {
   ipc settings;           sleep 2.8     # settings page
   ipc close;              sleep 1.2
   touch "$frames/stop"; wait "$rec" || true
+  omarchy bar set "$ID" pinentryCommand "$HERE/pinentry" >/dev/null
   local frame_count
   frame_count=$(find "$frames" -maxdepth 1 -type f -name 'f*.png' -printf '%f\n' | wc -l)
   echo "frames: $frame_count"

@@ -48,8 +48,8 @@ function statusLabel(status) {
 
 function statusGlyph(status) {
   var state = String(status || "checking")
-  if (state === "unlocked") return "󰌾"
-  if (state === "locked") return "󰌿"
+  if (state === "unlocked") return "󰿆"
+  if (state === "locked") return "󰌾"
   if (state === "unauthenticated") return "󰌋"
   if (state === "unavailable") return "󰏔"
   if (state === "error") return "󰀪"
@@ -91,6 +91,7 @@ function gateCopy(status, ready, missing, unlockPrompt) {
       body: "Some packages are missing. OmaWarden can install them in a terminal window.",
       action: "Install requirements",
       glyph: "󰏔",
+      buttonGlyph: "󰏔",
       key: "u"
     }
   }
@@ -100,6 +101,7 @@ function gateCopy(status, ready, missing, unlockPrompt) {
       body: "Sign-in happens in a terminal window so your email, master password and two-step code are typed straight into Bitwarden, never into the shell.",
       action: "Sign in",
       glyph: "󰌋",
+      buttonGlyph: "󰌋",
       key: "u"
     }
   }
@@ -110,18 +112,20 @@ function gateCopy(status, ready, missing, unlockPrompt) {
         ? "Unlock in a separate password window. Your unlocked session stays private to OmaWarden."
         : "Unlock in a native Omarchy prompt. Your password is cleared as soon as it is handed to Bitwarden.",
       action: "Unlock vault",
-      glyph: "󰌿",
+      glyph: "󰌾",
+      buttonGlyph: "󰿆",
       key: "u"
     }
   }
   if (state === "checking") {
-    return { title: "Checking Bitwarden…", body: "", action: "", glyph: "󰑓", key: "" }
+    return { title: "Checking Bitwarden…", body: "", action: "", glyph: "󰑓", buttonGlyph: "", key: "" }
   }
   return {
     title: "Needs attention",
     body: "OmaWarden couldn't read the vault. If Bitwarden lives somewhere unusual, set its command in Settings.",
     action: "Try again",
     glyph: "󰀪",
+    buttonGlyph: "󰀪",
     key: "r"
   }
 }
@@ -291,7 +295,7 @@ function actionLabel(action) {
 }
 
 function actionGlyph(action) {
-  if (action === "number") return "󰄰"
+  if (action === "number") return "󰆛"
   if (action === "cardholder") return "󰀄"
   if (action === "cardCode") return "󰌆"
   if (action === "expiry") return "󰃭"

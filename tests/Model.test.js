@@ -17,6 +17,20 @@ test("state presentation covers every agent state", () => {
   assert.notEqual(Model.statusGlyph("error"), Model.statusGlyph("unlocked"))
 })
 
+test("lock icons show the vault's state and the unlock action", () => {
+  const closed = "\u{F033E}" // nf-md-lock
+  const open = "\u{F0FC6}" // nf-md-lock_open_variant: legible at bar size
+  assert.equal(Model.statusGlyph("locked"), closed)
+  assert.equal(Model.statusGlyph("unlocked"), open)
+  const gate = Model.gateCopy("locked", true, "")
+  assert.equal(gate.glyph, closed)
+  assert.equal(gate.buttonGlyph, open)
+})
+
+test("card numbers copy with a card icon", () => {
+  assert.equal(Model.actionGlyph("number"), "\u{F019B}") // nf-md-credit_card_outline
+})
+
 test("the inherited Omarchy bar tooltip cannot interpret helper errors as markup", () => {
   const tooltip = Model.tooltip({
     vaultStatus: "error",
@@ -177,6 +191,7 @@ test("the gate explains each state without implementation jargon", () => {
   for (const [status, ready] of [["unavailable", false], ["unauthenticated", true], ["locked", true], ["error", true]]) {
     const copy = Model.gateCopy(status, ready, "")
     assert.ok(copy.title.length > 0 && copy.body.length > 0 && copy.action.length > 0, status)
+    assert.ok(copy.glyph.length > 0 && copy.buttonGlyph.length > 0, status)
     assert.doesNotMatch(copy.body, /session key|agent|pinentry|argv|fifo/i, status)
   }
   assert.equal(Model.gateCopy("locked", false, "").action, "Install requirements")

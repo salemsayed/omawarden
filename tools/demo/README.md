@@ -13,3 +13,9 @@ folder, with fictional logins.
 
 `setup` ends the current vault session; `restore` resets `cliCommand` and
 `pinentryCommand` to their defaults.
+
+Capture on a stock Omarchy desktop at 1920x1080, such as a disposable QEMU
+guest, so the media show the default theme rather than a customised one.
+`finish.py` finds the panel by the default theme's accent border; set
+`PANEL_BORDER` to another theme's accent colour (for example `1e66f5`) to
+use a different one.

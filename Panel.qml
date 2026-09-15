@@ -715,7 +715,7 @@ Panel {
               visible: root.gate.action !== ""
               anchors.horizontalCenter: parent.horizontalCenter
               text: root.gate.action
-              iconText: root.gate.glyph
+              iconText: root.gate.buttonGlyph
               bordered: true
               active: true
               foreground: root.accent
@@ -884,7 +884,7 @@ Panel {
                 textFormat: Text.PlainText
                 id: emptyGlyph
                 anchors.horizontalCenter: parent.horizontalCenter
-                text: root.searchLoading ? "󰑓" : (root.browsing ? "󰍉" : "󰧬")
+                text: root.searchLoading ? "󰑓" : (root.browsing ? "󰍉" : "󰦀")
                 color: root.faint
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.display
