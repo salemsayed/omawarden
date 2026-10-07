@@ -35,6 +35,7 @@ PROTOCOL_VERSION = 1
 AGENT_IDLE_EXIT_SECONDS = 10 * 60
 CLIENT_IO_TIMEOUT_SECONDS = 3.0
 STATUS_CACHE_SECONDS = 1.0
+STATUS_PROFILE_CACHE_SECONDS = 5 * 60
 VAULT_LIST_TIMEOUT_SECONDS = 45.0
 COPY_TIMEOUT_SECONDS = 30.0
 MAX_REQUEST_BYTES = 128 * 1024
@@ -713,6 +714,7 @@ class Agent:
         self._clipboard_lock = threading.Lock()
         self._status_cache: dict[str, Any] | None = None
         self._status_cached_at = 0.0
+        self._status_profile: tuple[Any, ...] | None = None
 
     def _bw(
         self,
@@ -752,6 +754,40 @@ class Agent:
     def _clear_status_cache(self) -> None:
         self._status_cache = None
         self._status_cached_at = 0.0
+        self._status_profile = None
+
+    def _status_profile_signature(self) -> tuple[Any, ...] | None:
+        """Stat the standard CLI profile without opening its secret-bearing data.
+
+        Unknown wrappers, extra command arguments and portable installations
+        keep the short cache because their profile location is not known.
+        """
+        try:
+            argv = self.config.bw_argv()
+            if len(argv) != 1 or Path(argv[0]).name != "bw":
+                return None
+            executable = resolve_executable(argv[0])
+            if not executable:
+                return None
+            # The official CLI gives a portable bw-data directory precedence
+            # over every environment setting. Fall back rather than guess.
+            executables = [executable, resolve_executable("node")]
+            if any(value and (Path(value).resolve().parent / "bw-data").exists() for value in executables):
+                return None
+            env = self.config.environment()
+            configured = env.get("BITWARDENCLI_APPDATA_DIR")
+            if configured:
+                directory = Path(os.path.abspath(configured))
+            else:
+                directory = Path(env.get("XDG_CONFIG_HOME") or str(Path.home() / ".config")) / "Bitwarden CLI"
+            path = directory / "data.json"
+            info = path.stat()
+            if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or not os.access(path, os.R_OK):
+                return None
+            return (str(path), info.st_dev, info.st_ino, info.st_size,
+                    info.st_mtime_ns, info.st_ctime_ns, info.st_mode, info.st_uid)
+        except (OSError, ValueError, PublicError):
+            return None
 
     def _drop_session(self, *, forget_recents: bool = False) -> None:
         self._stop_clipboards()
@@ -833,14 +869,20 @@ class Agent:
             "wlCopy": bool(resolve_executable("wl-copy")),
         }
 
-    def status(self) -> dict[str, Any]:
+    def status(self, *, force: bool = False) -> dict[str, Any]:
         now = time.monotonic()
         # This process owns the only session OmaWarden can use, so an unlocked
         # status stays authoritative until an action, configuration change, or
         # automatic lock clears it. Avoid serializing fast index searches
         # behind the comparatively slow Node-based `bw status` command.
         cache_is_fresh = now - self._status_cached_at < STATUS_CACHE_SECONDS
-        if self._status_cache is not None and (self.session or cache_is_fresh):
+        profile = self._status_profile_signature() if not self.session else None
+        cache_is_fresh = cache_is_fresh and (self._status_profile is None or profile == self._status_profile)
+        profile_is_fresh = (
+            profile is not None and profile == self._status_profile
+            and now - self._status_cached_at < STATUS_PROFILE_CACHE_SECONDS
+        )
+        if not force and self._status_cache is not None and (self.session or cache_is_fresh or profile_is_fresh):
             cached = dict(self._status_cache)
             cached["dependencies"] = dict(self._status_cache.get("dependencies") or {})
             return cached
@@ -897,6 +939,9 @@ class Agent:
         # call. Real `bw status` can take several seconds; using the earlier
         # timestamp made every queued monitor immediately repeat the work.
         self._status_cached_at = time.monotonic()
+        # A concurrent writer (or a CLI migration) must not make an old
+        # response look current. Cache only a profile unchanged during the call.
+        self._status_profile = profile if profile == self._status_profile_signature() else None
         return dict(response, dependencies=dict(dependencies))
 
     def _unlock_with_password(self, password: bytearray) -> dict[str, Any]:
@@ -1220,7 +1265,7 @@ class Agent:
         self.config = next_config
         action = str(request.get("action") or "")
         if action == "status":
-            return self.status()
+            return self.status(force=request.get("force") is True)
         if action == "unlock":
             return self.unlock()
         if action == "unlock-with-password":

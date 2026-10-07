@@ -13,6 +13,7 @@ import threading
 import time
 import unittest
 from pathlib import Path
+from typing import Any
 from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -824,6 +825,153 @@ class AgentTests(unittest.TestCase):
         self.agent.status()
         commands = [json.loads(line) for line in self.bw_log.read_text(encoding="utf-8").splitlines()]
         self.assertEqual(sum(command[:1] == ["status"] for command in commands), 2)
+
+    def configure_status_profile(self) -> Path:
+        bw = self.bin_dir / "bw"
+        bw.write_text(FAKE_BW, encoding="utf-8")
+        bw.chmod(0o755)
+        self.agent.config.bw_command = str(bw)
+        profile = self.directory / "profile"
+        profile.mkdir(mode=0o700)
+        self.agent.config.app_data_dir = str(profile)
+        data = profile / "data.json"
+        data.write_text("fixture only", encoding="utf-8")
+        return data
+
+    def status_call_count(self) -> int:
+        commands = [json.loads(line) for line in self.bw_log.read_text(encoding="utf-8").splitlines()]
+        return sum(command[:1] == ["status"] for command in commands)
+
+    def test_background_status_reuses_unchanged_profile_but_has_a_bounded_fallback(self) -> None:
+        self.configure_status_profile()
+        self.agent.status()
+        for _ in range(6):
+            self.agent._status_cached_at -= 30
+            self.agent.status()
+        self.assertEqual(self.status_call_count(), 1)
+        self.agent._status_cached_at -= AGENT.STATUS_PROFILE_CACHE_SECONDS
+        self.agent.status()
+        self.assertEqual(self.status_call_count(), 2)
+
+    def test_profile_cache_never_reads_vault_data(self) -> None:
+        self.configure_status_profile()
+        with mock.patch.object(Path, "open", side_effect=AssertionError("must not open profile")):
+            self.assertIsNotNone(self.agent._status_profile_signature())
+
+    def test_profile_edit_replacement_and_removal_refresh_status_immediately(self) -> None:
+        data = self.configure_status_profile()
+        self.agent.status()
+        data.write_text("changed fixture", encoding="utf-8")
+        with mock.patch.dict(os.environ, {"FAKE_BW_STATUS": "unauthenticated"}):
+            self.assertEqual(self.agent.status()["status"], "unauthenticated")
+        replacement = data.with_suffix(".new")
+        replacement.write_text("replacement fixture", encoding="utf-8")
+        replacement.replace(data)
+        self.assertEqual(self.agent.status()["status"], "locked")
+        data.unlink()
+        self.agent.status()
+        self.assertEqual(self.status_call_count(), 4)
+
+    def test_manual_refresh_bypasses_profile_cache_and_reports_cli_failure(self) -> None:
+        self.configure_status_profile()
+        self.agent.status()
+        with mock.patch.dict(os.environ, {"FAKE_BW_FAIL_STATUS": "1"}), self.assertRaises(AGENT.PublicError):
+            self.agent.status(force=True)
+        self.assertIsNone(self.agent._status_cache)
+        self.assertEqual(self.status_call_count(), 2)
+
+    def test_profile_changed_during_status_is_not_cached(self) -> None:
+        data = self.configure_status_profile()
+        original = self.agent._bw
+
+        def mutate(*args: str, **kwargs: Any) -> Any:
+            data.write_text("changed during CLI", encoding="utf-8")
+            return original(*args, **kwargs)
+
+        with mock.patch.object(self.agent, "_bw", side_effect=mutate):
+            self.agent.status()
+        self.assertIsNone(self.agent._status_profile)
+        self.agent._status_cached_at -= AGENT.STATUS_CACHE_SECONDS + 1
+        self.agent.status()
+        self.assertEqual(self.status_call_count(), 2)
+
+    def test_unknown_wrappers_and_command_arguments_keep_short_cache(self) -> None:
+        self.configure_status_profile()
+        self.agent.config.bw_command += " --profile elsewhere"
+        self.assertIsNone(self.agent._status_profile_signature())
+        self.agent.config.bw_command = str(self.bw)
+        self.assertIsNone(self.agent._status_profile_signature())
+
+    def test_status_request_force_reaches_backend(self) -> None:
+        with mock.patch.object(self.agent, "status", return_value={"ok": True}) as status:
+            self.agent.dispatch({"action": "status", "force": True})
+        status.assert_called_once_with(force=True)
+
+    def test_unreadable_or_nonregular_profile_keeps_short_cache(self) -> None:
+        data = self.configure_status_profile()
+        self.agent.status()
+        data.chmod(0)
+        self.assertIsNone(self.agent._status_profile_signature())
+        self.agent.status()
+        self.assertEqual(self.status_call_count(), 2)
+        data.unlink()
+        data.mkdir()
+        self.assertIsNone(self.agent._status_profile_signature())
+
+    def test_unowned_profile_keeps_short_cache(self) -> None:
+        data = self.configure_status_profile()
+        info = data.stat()
+        with mock.patch.object(Path, "stat", return_value=mock.Mock(
+            st_mode=info.st_mode, st_uid=os.getuid() + 1,
+        )):
+            self.assertIsNone(self.agent._status_profile_signature())
+
+    def test_portable_cli_and_node_profiles_keep_short_cache(self) -> None:
+        self.configure_status_profile()
+        portable = self.bin_dir / "bw-data"
+        portable.mkdir()
+        self.assertIsNone(self.agent._status_profile_signature())
+        portable.rmdir()
+        node_dir = self.directory / "node-bin"
+        node_dir.mkdir()
+        (node_dir / "bw-data").mkdir()
+        original = AGENT.resolve_executable
+        with mock.patch.object(AGENT, "resolve_executable", side_effect=lambda command:
+            str(node_dir / "node") if command == "node" else original(command)):
+            self.assertIsNone(self.agent._status_profile_signature())
+
+    def test_standard_profile_location_matches_cli_environment_precedence(self) -> None:
+        data = self.configure_status_profile()
+        self.agent.config.app_data_dir = ""
+        xdg = self.directory / "xdg"
+        xdg_data = xdg / "Bitwarden CLI" / "data.json"
+        xdg_data.parent.mkdir(parents=True)
+        xdg_data.write_text("fixture only", encoding="utf-8")
+        with mock.patch.dict(os.environ, {"BITWARDENCLI_APPDATA_DIR": str(data.parent), "XDG_CONFIG_HOME": str(xdg)}):
+            self.assertEqual(self.agent._status_profile_signature()[0], str(data))
+            os.environ.pop("BITWARDENCLI_APPDATA_DIR")
+            self.assertEqual(self.agent._status_profile_signature()[0], str(xdg_data))
+
+    def test_plain_full_path_and_argument_commands_report_status(self) -> None:
+        self.configure_status_profile()
+        for command in ("bw", str(self.bin_dir / "bw"), str(self.bw) + " status"):
+            with self.subTest(command=command):
+                self.agent.config.bw_command = command
+                self.assertEqual(self.agent.status(force=True)["status"], "locked")
+
+    def test_failed_login_and_offline_sync_preserve_safe_vault_state(self) -> None:
+        self.configure_status_profile()
+        self.agent.status()
+        args = AGENT.build_parser().parse_args(["login-terminal", "--bw-command", str(self.bw)])
+        with mock.patch.dict(os.environ, {"FAKE_BW_STATUS": "unauthenticated", "FAKE_BW_FAIL_LOGIN": "1"}), \
+             mock.patch("builtins.input", return_value=""), mock.patch("sys.stdout"):
+            self.assertNotEqual(AGENT.login_terminal(args), 0)
+        self.agent.unlock_with_password(bytearray(b"correct horse battery staple"))
+        self.assertEqual(self.agent.status()["status"], "unlocked")
+        with mock.patch.dict(os.environ, {"FAKE_BW_FAIL_SYNC": "1"}), self.assertRaises(AGENT.PublicError):
+            self.agent.sync()
+        self.assertEqual(self.agent.status()["status"], "unlocked")
+        self.assertTrue(self.agent.session)
 
     def test_inactivity_auto_lock_and_idle_exit_boundaries(self) -> None:
         self.agent.session = "session"

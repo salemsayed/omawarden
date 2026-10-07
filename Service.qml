@@ -112,9 +112,9 @@ Item {
     return JSON.stringify(request)
   }
 
-  function refresh() {
+  function refresh(force = true) {
     if (statusProcess.running || actionProcess.running || helperPath === "") return
-    _statusInput = requestObject("status")
+    _statusInput = requestObject("status", { force: force })
     statusBusy = true
     statusProcess.running = true
   }
@@ -386,7 +386,7 @@ Item {
     interval: root.refreshIntervalSec * 1000
     repeat: true
     running: true
-    onTriggered: root.refresh()
+    onTriggered: root.refresh(false)
   }
 
   Timer {

@@ -124,7 +124,7 @@ omarchy bar set io.github.salemsayed.omawarden defaultCopy Username
 | `serverUrl` | *(empty)* | Self-hosted or EU server, applied at sign-in |
 | `appDataDir` | *(empty)* | Separate CLI profile for a second account |
 | `cliCommand` | `bw` | Bitwarden CLI command |
-| `refreshIntervalSec` | `30` | How often the bar re-reads the vault state |
+| `refreshIntervalSec` | `30` | How often the bar checks for vault-state changes |
 
 ### Unlock prompts
 

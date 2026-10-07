@@ -75,6 +75,16 @@ CLI. Lock, sign-out, profile changes, failed status checks and inactivity
 locking clear that response together with the session capability, so this
 cache cannot keep an otherwise closed vault accessible.
 
+### Status polling
+
+Locked and signed-out background status checks may reuse a response while the
+standard Bitwarden CLI profile's file metadata is unchanged, for at most five
+minutes. Only inode, size, timestamps, ownership and permissions are inspected;
+the profile is never opened by this check. Replacement, removal, changed
+metadata, a manual refresh, or an action/configuration change causes a fresh
+CLI check. Unknown command wrappers and portable profiles use the original
+short cache. This caches display status only and grants no vault capability.
+
 ### Screen lock
 
 When enabled, the service watches Omarchy's `omarchy.lock` service and

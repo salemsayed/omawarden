@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.1.7 - 2026-10-07
+
+- Avoid starting the Bitwarden CLI every background poll while its standard
+  profile is unchanged. Detect profile edits and replacements using file
+  metadata, keep manual refresh immediate, and recheck at least every five
+  minutes. Locking and vault capabilities are unchanged.
+
 ## 1.1.6 - 2026-09-15
 
 - The README now shows a card search, the native unlock prompt and, in the
