@@ -902,6 +902,25 @@ class AgentTests(unittest.TestCase):
         self.agent.config.bw_command = str(self.bw)
         self.assertIsNone(self.agent._status_profile_signature())
 
+    def test_env_assignment_wrapper_uses_the_profile_it_selects(self) -> None:
+        data = self.configure_status_profile()
+        bw = self.agent.config.bw_command
+        plain = self.agent._status_profile_signature()
+        self.agent.config.bw_command = f"env NODE_OPTIONS=--require=/x.cjs OMAWARDEN_CLIENT_CERT=/c.pem {bw}"
+        self.assertEqual(self.agent._status_profile_signature(), plain)
+        other = self.directory / "other-profile" / "data.json"
+        other.parent.mkdir(mode=0o700)
+        other.write_text("fixture only", encoding="utf-8")
+        self.agent.config.bw_command = f"env BITWARDENCLI_APPDATA_DIR={other.parent} {bw}"
+        self.assertEqual(self.agent._status_profile_signature()[0], str(other))
+        self.agent.config.bw_command = f"env XDG_CONFIG_HOME={self.directory / 'unused'} {bw}"
+        self.assertEqual(self.agent._status_profile_signature()[0], str(data))
+        for command in (f"env -i {bw}", f"env PATH=/elsewhere {bw}", f"env HOME=/elsewhere {bw}",
+                        f"env A=1 {bw} --profile elsewhere", "env A=1", f"env 1A=x {bw}"):
+            with self.subTest(command=command):
+                self.agent.config.bw_command = command
+                self.assertIsNone(self.agent._status_profile_signature())
+
     def test_status_request_force_reaches_backend(self) -> None:
         with mock.patch.object(self.agent, "status", return_value={"ok": True}) as status:
             self.agent.dispatch({"action": "status", "force": True})
@@ -954,7 +973,7 @@ class AgentTests(unittest.TestCase):
 
     def test_plain_full_path_and_argument_commands_report_status(self) -> None:
         self.configure_status_profile()
-        for command in ("bw", str(self.bin_dir / "bw"), str(self.bw) + " status"):
+        for command in ("bw", str(self.bin_dir / "bw"), str(self.bw) + " status", "env OMAWARDEN_CLIENT_CERT=/c.pem bw"):
             with self.subTest(command=command):
                 self.agent.config.bw_command = command
                 self.assertEqual(self.agent.status(force=True)["status"], "locked")

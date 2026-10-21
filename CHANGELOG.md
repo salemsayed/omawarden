@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.1.8 - 2026-10-21
+
+- Self-hosted servers behind mutual TLS work with a client certificate.
+  `tools/client-certificate.cjs` lets the Node.js Bitwarden CLI present one,
+  and [docs/CLIENT-CERTIFICATES.md](docs/CLIENT-CERTIFICATES.md) covers the
+  setup, including a local proxy for the standalone `bw` binary (#1).
+- Background status checks keep the 1.1.7 profile cache when the CLI command
+  is `env NAME=value … bw`, as the client-certificate setup uses.
+
 ## 1.1.7 - 2026-10-07
 
 - Avoid starting the Bitwarden CLI every background poll while its standard

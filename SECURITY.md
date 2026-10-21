@@ -82,8 +82,10 @@ standard Bitwarden CLI profile's file metadata is unchanged, for at most five
 minutes. Only inode, size, timestamps, ownership and permissions are inspected;
 the profile is never opened by this check. Replacement, removal, changed
 metadata, a manual refresh, or an action/configuration change causes a fresh
-CLI check. Unknown command wrappers and portable profiles use the original
-short cache. This caches display status only and grants no vault capability.
+CLI check. `env NAME=value … bw` commands are followed with those variables
+applied, unless they set `PATH` or `HOME`; other command wrappers and portable
+profiles use the original short cache. This caches display status only and
+grants no vault capability.
 
 ### Screen lock
 
@@ -122,6 +124,15 @@ user.
 CLI's own prompt. A configured server URL is applied with `bw config server`
 before login, only while signed out. Sign-out runs `bw logout`, clears the
 clipboard and wipes the session, index and recents.
+
+### Client certificates
+
+The optional [`tools/client-certificate.cjs`](tools/client-certificate.cjs)
+preload runs inside `bw` only when you add it to the CLI command
+([guide](docs/CLIENT-CERTIFICATES.md)). It reads the files named in
+`OMAWARDEN_CLIENT_CERT` and `OMAWARDEN_CLIENT_KEY`, refuses a key other users
+can read or one with a passphrase, and sets them on Node's default HTTPS
+agent. It does nothing else.
 
 ## Deliberate limitations
 

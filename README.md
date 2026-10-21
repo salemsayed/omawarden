@@ -143,6 +143,9 @@ Set **Server URL** before you sign in; it is applied as part of sign-in.
 To change servers later, sign out from the Account section and sign in
 again. A second account gets its own **CLI profile folder**.
 
+If your server requires a client certificate (mTLS), follow
+[docs/CLIENT-CERTIFICATES.md](docs/CLIENT-CERTIFICATES.md).
+
 ### Other CLI installs
 
 `cliCommand` accepts a full path or a command with arguments, for example
@@ -205,6 +208,9 @@ from malware already running as your user.
   checked"** — OmaWarden only unlocks while Omarchy reports the screen as
   unlocked; `omarchy-shell io.github.salemsayed.omawarden screenLockState`
   shows what it sees.
+- **Sign-in fails with a `403` from a self-hosted server** — if it sits
+  behind mutual TLS (for example Cloudflare's mTLS rules), set up a
+  [client certificate](docs/CLIENT-CERTIFICATES.md).
 - **The helper won't start** — `python3 omawarden-agent.py request` prints
   the reason.
 

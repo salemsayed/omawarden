@@ -761,9 +761,22 @@ class Agent:
 
         Unknown wrappers, extra command arguments and portable installations
         keep the short cache because their profile location is not known.
+        `env NAME=value … bw`, which the client-certificate setup uses, is
+        followed unless it changes where executables or home are found.
         """
         try:
             argv = self.config.bw_argv()
+            env = self.config.environment()
+            if Path(argv[0]).name == "env":
+                argv = argv[1:]
+                while argv:
+                    name, separator, value = argv[0].partition("=")
+                    if not separator or not (name.isascii() and name.isidentifier()):
+                        break
+                    if name in {"PATH", "HOME"}:
+                        return None
+                    env[name] = value
+                    argv = argv[1:]
             if len(argv) != 1 or Path(argv[0]).name != "bw":
                 return None
             executable = resolve_executable(argv[0])
@@ -774,7 +787,6 @@ class Agent:
             executables = [executable, resolve_executable("node")]
             if any(value and (Path(value).resolve().parent / "bw-data").exists() for value in executables):
                 return None
-            env = self.config.environment()
             configured = env.get("BITWARDENCLI_APPDATA_DIR")
             if configured:
                 directory = Path(os.path.abspath(configured))
