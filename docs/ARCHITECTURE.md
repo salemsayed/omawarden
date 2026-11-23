@@ -28,13 +28,15 @@ gate, notices, and groups comes from `Model.js` so it can be unit-tested.
 setup steps, requirement rows, result grouping, action availability, and
 human-readable durations. The Node test suite exercises it directly.
 
-`Service.qml` serializes bounded requests, runs one helper process per
-request, and parses allowlisted responses. Separate status, search, and
+`Service.qml` serializes bounded requests and parses allowlisted responses.
+Status and actions run one helper process per request; separate status and
 action processes keep the bar responsive while preventing duplicate actions.
-Search input uses a short debounce and coalesces in-flight requests without
-presenting stale results. After a successful unlock it triggers the sync
-itself; that background action prepares the metadata index before reporting
-completion, so the first panel search is warm. `ScreenLockMonitor.qml` checks
+Searches go straight to the agent's socket, whose path the status response
+reports, and fall back to a helper process if the socket can't be reached.
+Search input uses a 30 ms debounce, just above the usual key-repeat interval,
+and coalesces in-flight requests without presenting stale results. After a
+successful unlock it triggers the sync itself in the background.
+`ScreenLockMonitor.qml` checks
 the compositor through `omarchy-hyprland-session-locked` every 500 ms with a
 one-second process timeout. It uses no private shell authentication objects.
 Unknown, failed, or stale results block unlocking; with screen-lock protection
@@ -57,12 +59,28 @@ executes Bitwarden operations, projects allowlisted login and card metadata,
 ranks searches, tracks recently used item IDs, manages clipboard owner
 processes, and enforces the inactivity lock. Card copies pipe `bw get item`
 through a short-lived field filter because the CLI has no direct card-field
-command. After unlock the agent builds an in-memory index containing only the
-same allowlisted metadata returned to QML;
-the automatic sync performs that cold work before it reports completion, or
-unlock does so after clearing its secret inputs when automatic sync is off.
-Sync and relevant configuration changes rebuild the index; lock, sign-out,
-and agent exit wipe it.
+command. After unlock, once the password and its FIFO are cleared, the agent
+builds an in-memory index from the local vault containing only the same
+allowlisted metadata returned to QML. Searches that arrive first wait for that
+one load rather than starting another. Sync rebuilds the index from the fresh
+vault and swaps it in when it is ready, so searches keep answering from the
+previous index meanwhile; relevant configuration changes rebuild it too, and
+lock, sign-out and agent exit wipe it.
+
+The agent serves each client on its own thread. Bitwarden CLI commands run one
+at a time; searches, cached status and recents never wait for them. A session
+is only set while the CLI lock is held, and every CLI result is applied only if
+no lock, sign-out or profile change happened meanwhile, so a sync that finishes
+after a lock cannot bring its index back. Lock wipes the session, index and
+clipboard at once, before waiting for the CLI. Every CLI command runs with
+`--response`, and the agent takes the reply as soon as its JSON is complete:
+the CLI keeps its process alive for one to two seconds after answering while
+internal caches expire, so the finished process is reaped in the background
+and terminated if it lingers past 30 seconds. CLI storage is guarded by its own
+file lock, so a lingering process cannot overwrite a newer one. The CLI also
+gets a private Node compile cache under `~/.cache/omawarden` (compiled CLI code
+only) unless `NODE_COMPILE_CACHE` is already set. On exit the agent finishes
+requests it has already accepted before it locks.
 
 Search keeps a compact, case-folded haystack per projected item. Ranking uses
 a bounded top-K selection because the UI can show at most 50 rows, avoiding a
@@ -71,8 +89,7 @@ resolved with a bounded scan instead of building another vault-sized map.
 Near-simultaneous locked or signed-out status requests from per-monitor widget
 instances share a one-second cache measured from completion of the underlying
 CLI poll. While the agent owns an unlocked session, that response remains
-authoritative until a state or configuration change invalidates it; this keeps
-routine status polling from blocking interactive searches behind `bw status`.
+authoritative until a state or configuration change invalidates it.
 
 The socket lives in `$XDG_RUNTIME_DIR/omawarden.sock`, falling back to a
 user-owned runtime directory only when necessary. An advisory lock prevents

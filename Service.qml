@@ -12,6 +12,7 @@ Item {
   property string statusText: "Checking Bitwarden…"
   property string lastSync: ""
   property string serverUrl: ""
+  property string agentSocket: ""
   property var dependencies: ({})
   property var items: []
   property string activeQuery: ""
@@ -79,6 +80,7 @@ Item {
   property string _runningQuery: ""
   property bool _searchQueued: false
   property bool _searchCancelled: false
+  property string _searchTransport: ""
   property bool _screenLockPending: false
   property bool _syncAfterUnlock: false
   property bool _unlockAfterStatus: false
@@ -107,7 +109,7 @@ Item {
   }
 
   function requestObject(action, extra) {
-    var request = { action: action, config: configObject() }
+    var request = { action: action, config: configObject(), protocolVersion: Model.protocolVersion }
     if (extra) for (var key in extra) request[key] = extra[key]
     return JSON.stringify(request)
   }
@@ -127,7 +129,7 @@ Item {
       activeQuery = clean
       return
     }
-    if (searchProcess.running) {
+    if (searchBusy) {
       _queuedQuery = clean
       _searchQueued = true
       return
@@ -137,7 +139,31 @@ Item {
     _runningQuery = clean
     _searchInput = requestObject("search", { query: clean })
     searchBusy = true
+    if (agentSocket !== "") {
+      _searchTransport = "socket"
+      searchSocketDeadline.restart()
+      searchSocket.connected = true
+    } else searchViaHelper()
+  }
+
+  function searchViaHelper() {
+    _searchTransport = "helper"
+    searchSocketDeadline.stop()
+    searchSocket.connected = false
     searchProcess.running = true
+  }
+
+  function finishSearch() {
+    var cancelled = _searchCancelled
+    searchSocketDeadline.stop()
+    _searchTransport = ""
+    searchBusy = false
+    if (_searchQueued) {
+      var next = _queuedQuery
+      _searchQueued = false
+      _queuedQuery = ""
+      search(next)
+    } else if (!cancelled) searchCompleted()
   }
 
   function discardSearch() {
@@ -304,6 +330,7 @@ Item {
       return
     }
     dependencies = parsed.dependencies || {}
+    agentSocket = String(parsed.socket || "")
     var nextStatus = String(parsed.status || "error")
     var statusChanged = nextStatus !== vaultStatus
     vaultStatus = nextStatus
@@ -430,16 +457,35 @@ Item {
       onStreamFinished: root.applySearch(text)
     }
     stderr: StdioCollector { waitForEnd: true }
-    onExited: {
-      var cancelled = root._searchCancelled
-      root.searchBusy = false
-      if (root._searchQueued) {
-        var next = root._queuedQuery
-        root._searchQueued = false
-        root._queuedQuery = ""
-        root.search(next)
-      } else if (!cancelled) root.searchCompleted()
+    onExited: root.finishSearch()
+  }
+
+  Socket {
+    id: searchSocket
+    path: root.agentSocket
+    parser: SplitParser {
+      onRead: function(data) {
+        if (root._searchTransport !== "socket") return
+        root._searchTransport = "answered"
+        searchSocket.connected = false
+        root.applySearch(data)
+        root.finishSearch()
+      }
     }
+    onConnectionStateChanged: {
+      if (root._searchTransport !== "socket") return
+      if (connected) {
+        write(root._searchInput + "\n")
+        flush()
+      } else root.searchViaHelper()
+    }
+    onError: if (root._searchTransport === "socket") root.searchViaHelper()
+  }
+
+  Timer {
+    id: searchSocketDeadline
+    interval: 55000
+    onTriggered: if (root._searchTransport === "socket") root.searchViaHelper()
   }
 
   Process {

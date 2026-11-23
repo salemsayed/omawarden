@@ -201,9 +201,10 @@ from malware already running as your user.
   under Settings → Advanced.
 - **The sign-in terminal says you're already signed in** — close it and
   choose *Unlock vault*.
-- **Unlock takes a moment on a large vault** — OmaWarden prepares its
-  memory-only search index before the background sync reports that it is done.
-  Once ready, opening and searching do not rerun that cold load.
+- **Unlock takes a moment on a large vault** — right after unlock OmaWarden
+  builds its memory-only search index from the vault on disk, then syncs in
+  the background. Searches answer from memory throughout, including while a
+  sync runs.
 - **"Unlock is unavailable while the screen is locked or its state cannot be
   checked"** — OmaWarden only unlocks while Omarchy reports the screen as
   unlocked; `omarchy-shell io.github.salemsayed.omawarden screenLockState`

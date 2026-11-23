@@ -2,6 +2,8 @@
 // and the Node test suite. No Qt, no state: everything here is a function of
 // its arguments so it can be unit-tested outside the shell.
 
+var protocolVersion = 1
+
 function defaultResponse() {
   return { ok: false, error: "No response", items: [], dependencies: {} }
 }
@@ -426,6 +428,7 @@ function secondsLabel(seconds) {
 
 if (typeof module !== "undefined") {
   module.exports = {
+    protocolVersion: protocolVersion,
     defaultResponse: defaultResponse,
     parseResponse: parseResponse,
     filePath: filePath,

@@ -9,6 +9,7 @@ Wayland clipboard without crossing Python or QML stdout.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import errno
 import fcntl
 import heapq
@@ -34,6 +35,9 @@ PLUGIN_ID = "io.github.salemsayed.omawarden"
 PROTOCOL_VERSION = 1
 AGENT_IDLE_EXIT_SECONDS = 10 * 60
 CLIENT_IO_TIMEOUT_SECONDS = 3.0
+MAX_CONCURRENT_CLIENTS = 16
+CLIENT_DRAIN_SECONDS = 130.0
+AGENT_START_RETRY_SECONDS = 1.0
 STATUS_CACHE_SECONDS = 1.0
 STATUS_PROFILE_CACHE_SECONDS = 5 * 60
 VAULT_LIST_TIMEOUT_SECONDS = 45.0
@@ -42,8 +46,9 @@ MAX_REQUEST_BYTES = 128 * 1024
 MAX_RESPONSE_BYTES = 2 * 1024 * 1024
 MAX_MASTER_PASSWORD_BYTES = 16 * 1024
 MAX_VAULT_LIST_STDOUT_BYTES = 64 * 1024 * 1024
-MAX_VAULT_LIST_STDERR_BYTES = 128 * 1024
-CAPPED_OUTPUT_RETURN_CODE = 125
+MAX_CLI_STDOUT_BYTES = 1024 * 1024
+MAX_CLI_STDERR_BYTES = 128 * 1024
+CLI_EXIT_GRACE_SECONDS = 30.0
 MAX_ITEM_ID_CHARS = 128
 SAFE_URL_SCHEMES = {"http", "https"}
 LOGIN_COPY_FIELDS = {"password", "username", "totp"}
@@ -118,6 +123,10 @@ class Config:
             env["BW_SESSION"] = session
         else:
             env.pop("BW_SESSION", None)
+        if "NODE_COMPILE_CACHE" not in env:
+            compile_cache = node_compile_cache()
+            if compile_cache:
+                env["NODE_COMPILE_CACHE"] = compile_cache
         return env
 
 
@@ -173,6 +182,16 @@ def runtime_dir() -> Path:
     if not _private_runtime_directory(fallback):
         raise PublicError("OmaWarden's fallback runtime folder isn't private")
     return fallback
+
+
+def node_compile_cache() -> str:
+    base = os.environ.get("XDG_CACHE_HOME", "").strip() or str(Path.home() / ".cache")
+    directory = Path(base) / "omawarden" / "node-compile-cache"
+    try:
+        directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+    except (OSError, ValueError):
+        return ""
+    return str(directory) if _private_runtime_directory(directory) else ""
 
 
 def socket_path() -> Path:
@@ -577,40 +596,32 @@ def _terminate_process(process: subprocess.Popen[Any]) -> None:
         pass
 
 
-def _run_captured(
-    argv: list[str],
-    *,
-    env: dict[str, str],
-    timeout: float,
-    input_bytes: bytes | None = None,
-) -> subprocess.CompletedProcess[bytes]:
-    """Run a bounded command and reap its whole wrapper process group."""
-    process = subprocess.Popen(
-        argv,
-        stdin=subprocess.PIPE if input_bytes is not None else subprocess.DEVNULL,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        env=env,
-        start_new_session=True,
-    )
+class CliOverflow(RuntimeError):
+    pass
+
+
+def _reap_in_background(process: subprocess.Popen[bytes]) -> None:
+    def reap() -> None:
+        try:
+            process.wait(timeout=CLI_EXIT_GRACE_SECONDS)
+        except subprocess.TimeoutExpired:
+            _terminate_process(process)
+
+    threading.Thread(target=reap, name="omawarden-cli-reaper", daemon=True).start()
+
+
+def _complete_response(output: bytearray) -> Any:
+    if not output.rstrip().endswith(b"}"):
+        return None
     try:
-        stdout, stderr = process.communicate(input=input_bytes, timeout=timeout)
-    except subprocess.TimeoutExpired:
-        _terminate_process(process)
-        raise
-    return subprocess.CompletedProcess(argv, process.returncode, stdout, stderr)
+        return json.loads(output)
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return None
 
 
-def _run_capped_vault_list(
-    argv: list[str], *, env: dict[str, str], timeout: float,
-) -> subprocess.CompletedProcess[bytes]:
-    """Capture a vault listing without allowing raw vault data to exhaust memory.
-
-    `bw list items --raw` contains every secret-bearing field before this agent
-    projects the response to metadata. Drain both pipes concurrently, stop the
-    whole child process group on either ceiling, and return a non-zero result
-    without preserving an unbounded tail for an error path to expose.
-    """
+def _run_cli_response(
+    argv: list[str], *, env: dict[str, str], timeout: float, stdout_limit: int = MAX_CLI_STDOUT_BYTES,
+) -> Any:
     process = subprocess.Popen(
         argv,
         stdin=subprocess.DEVNULL,
@@ -621,24 +632,22 @@ def _run_capped_vault_list(
     )
     if process.stdout is None or process.stderr is None:
         _terminate_process(process)
-        raise RuntimeError("Couldn't capture Bitwarden vault output")
-    limits = {"stdout": MAX_VAULT_LIST_STDOUT_BYTES, "stderr": MAX_VAULT_LIST_STDERR_BYTES}
+        raise CliOverflow("Couldn't capture Bitwarden output")
+    limits = {"stdout": stdout_limit, "stderr": MAX_CLI_STDERR_BYTES}
     streams = {"stdout": process.stdout, "stderr": process.stderr}
     buffers = {"stdout": bytearray(), "stderr": bytearray()}
     selector = selectors.DefaultSelector()
     for name, stream in streams.items():
         selector.register(stream, selectors.EVENT_READ, name)
-
     deadline = time.monotonic() + max(0.05, float(timeout))
-    exceeded = ""
-    timed_out = False
+    response: Any = None
+    answered = False
     try:
-        while selector.get_map():
+        while not answered and selector.get_map():
             remaining = deadline - time.monotonic()
             if remaining <= 0:
-                timed_out = True
                 _terminate_process(process)
-                break
+                raise subprocess.TimeoutExpired(argv, timeout)
             for key, _ in selector.select(min(0.1, remaining)):
                 name = str(key.data)
                 remaining_bytes = limits[name] - len(buffers[name])
@@ -653,14 +662,14 @@ def _run_capped_vault_list(
                         pass
                     continue
                 if len(chunk) > remaining_bytes:
-                    if remaining_bytes > 0:
-                        buffers[name].extend(chunk[:remaining_bytes])
-                    exceeded = name
                     _terminate_process(process)
-                    break
+                    raise CliOverflow("Bitwarden output exceeded OmaWarden's safety limit")
                 buffers[name].extend(chunk)
-            if exceeded:
-                break
+                if name == "stdout":
+                    response = _complete_response(buffers["stdout"])
+                    answered = response is not None
+                    if answered:
+                        break
     finally:
         selector.close()
         for stream in streams.values():
@@ -668,31 +677,17 @@ def _run_capped_vault_list(
                 stream.close()
             except OSError:
                 pass
-
-    if process.poll() is None:
-        _terminate_process(process)
+        buffers["stdout"].clear()
+        buffers["stderr"].clear()
+    if answered:
+        _reap_in_background(process)
+        return response
     try:
-        returncode = process.wait(timeout=1)
+        process.wait(timeout=max(0.05, deadline - time.monotonic()))
     except subprocess.TimeoutExpired:
         _terminate_process(process)
-        returncode = process.wait()
-    if exceeded:
-        # A capped prefix can still contain vault secrets. The failure response
-        # has no use for it, so release it before handing control back to the
-        # long-lived agent.
-        buffers["stdout"].clear()
-        buffers["stderr"].clear()
-        return subprocess.CompletedProcess(
-            argv, CAPPED_OUTPUT_RETURN_CODE, b"",
-            b"Bitwarden vault listing exceeded OmaWarden's safety limit",
-        )
-    if timed_out:
-        buffers["stdout"].clear()
-        buffers["stderr"].clear()
-        raise subprocess.TimeoutExpired(argv, timeout)
-    return subprocess.CompletedProcess(
-        argv, returncode, bytes(buffers["stdout"]), bytes(buffers["stderr"]),
-    )
+        raise
+    return None
 
 
 class Agent:
@@ -715,41 +710,46 @@ class Agent:
         self._status_cache: dict[str, Any] | None = None
         self._status_cached_at = 0.0
         self._status_profile: tuple[Any, ...] | None = None
+        self._generation = 0
+        self._index_loads = 0
+        self._state = threading.RLock()
+        self._index_settled = threading.Condition(self._state)
+        self._cli = threading.RLock()
 
     def _bw(
         self,
         *arguments: str,
-        session: bool = False,
-        timeout: int = 30,
-        input_bytes: bytes | None = None,
-    ) -> subprocess.CompletedProcess[bytes]:
-        argv = self.config.bw_argv() + list(arguments)
+        failure: str,
+        session: str = "",
+        timeout: float = 30,
+        stdout_limit: int = MAX_CLI_STDOUT_BYTES,
+        timeout_message: str = "Bitwarden took too long to respond",
+    ) -> Any:
+        argv = self.config.bw_argv() + list(arguments) + ["--response", "--nointeraction"]
         try:
-            return _run_captured(
-                argv,
-                env=self.config.environment(self.session if session else ""),
-                timeout=timeout,
-                input_bytes=input_bytes,
+            response = _run_cli_response(
+                argv, env=self.config.environment(session), timeout=timeout, stdout_limit=stdout_limit,
             )
         except FileNotFoundError as exc:
             raise PublicError("The Bitwarden CLI (bw) isn't installed") from exc
         except subprocess.TimeoutExpired as exc:
-            raise PublicError("Bitwarden took too long to respond") from exc
-
-    def _json(self, completed: subprocess.CompletedProcess[bytes], failure: str) -> Any:
-        if completed.returncode != 0:
+            raise PublicError(timeout_message) from exc
+        except CliOverflow as exc:
+            raise PublicError(failure) from exc
+        if not isinstance(response, dict) or response.get("success") is not True:
             raise PublicError(failure)
-        try:
-            return json.loads(completed.stdout.decode("utf-8"))
-        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-            raise PublicError("Bitwarden returned data OmaWarden couldn't read") from exc
+        data = response.get("data")
+        return data if isinstance(data, dict) else {}
 
     def _touch(self) -> None:
-        self.last_access = time.monotonic()
+        with self._state:
+            self.last_access = time.monotonic()
 
     def _clear_index(self) -> None:
-        self._item_index.clear()
-        self._index_ready = False
+        with self._state:
+            self._item_index = []
+            self._index_ready = False
+            self._index_settled.notify_all()
 
     def _clear_status_cache(self) -> None:
         self._status_cache = None
@@ -801,13 +801,16 @@ class Agent:
         except (OSError, ValueError, PublicError):
             return None
 
-    def _drop_session(self, *, forget_recents: bool = False) -> None:
-        self._stop_clipboards()
-        self.session = ""
-        self._clear_index()
-        self._clear_status_cache()
-        if forget_recents:
-            self._forget_recents()
+    def _drop_session(self, *, forget_recents: bool = False) -> int:
+        with self._state:
+            self._stop_clipboards()
+            self.session = ""
+            self._generation += 1
+            self._clear_index()
+            self._clear_status_cache()
+            if forget_recents:
+                self._forget_recents()
+            return self._generation
 
     def _remember_recent(self, item_id: str) -> None:
         if not item_id:
@@ -818,57 +821,94 @@ class Agent:
     def _forget_recents(self) -> None:
         self._recent_ids = []
 
-    def _load_index(self) -> None:
-        argv = self.config.bw_argv() + ["list", "items", "--raw", "--nointeraction"]
+    def _fetch_index(self, session: str, show_usernames: bool) -> list[SearchEntry]:
         items: Any = None
-        completed: subprocess.CompletedProcess[bytes] | None = None
         try:
-            try:
-                completed = _run_capped_vault_list(
-                    argv,
-                    env=self.config.environment(self.session),
-                    timeout=VAULT_LIST_TIMEOUT_SECONDS,
-                )
-            except FileNotFoundError as exc:
-                raise PublicError("The Bitwarden CLI (bw) isn't installed") from exc
-            except subprocess.TimeoutExpired as exc:
-                raise PublicError("Bitwarden took too long to respond") from exc
-            if completed is None:
+            listing = self._bw(
+                "list", "items",
+                failure="Couldn't load the vault. Try syncing again.",
+                session=session,
+                timeout=VAULT_LIST_TIMEOUT_SECONDS,
+                stdout_limit=MAX_VAULT_LIST_STDOUT_BYTES,
+            )
+            items = listing.get("data")
+            if not isinstance(items, list):
                 raise PublicError("Couldn't load the vault. Try syncing again.")
-            items = self._json(completed, "Couldn't load the vault. Try syncing again.")
-            metadata = project_item_metadata(items, self.config.show_usernames)
-            self._item_index = build_search_index(metadata)
-            self._index_ready = True
+            return build_search_index(project_item_metadata(items, show_usernames))
         finally:
-            # Drop both decoded full objects and captured raw CLI output as
-            # soon as the metadata projection is complete.
             if isinstance(items, list):
                 items.clear()
-            if completed is not None:
-                completed.stdout = b""
-                completed.stderr = b""
 
-    def _warm_index(self) -> bool:
-        """Best-effort index preparation that never turns a good sync into a failure."""
-        self._clear_index()
+    @contextlib.contextmanager
+    def _pending_index_load(self) -> Any:
+        with self._state:
+            self._index_loads += 1
         try:
-            self._load_index()
-        except PublicError:
-            # Search will retry and surface the useful error if the user
-            # actually asks for vault contents later.
-            self._clear_index()
-            return False
-        return True
+            yield
+        finally:
+            with self._state:
+                self._index_loads -= 1
+                self._index_settled.notify_all()
+
+    def _load_index(self, generation: int) -> bool:
+        with self._cli:
+            with self._state:
+                if generation != self._generation or not self.session:
+                    return False
+                session = self.session
+                show_usernames = self.config.show_usernames
+            index = self._fetch_index(session, show_usernames)
+            with self._state:
+                if generation != self._generation or show_usernames != self.config.show_usernames:
+                    return False
+                self._item_index = index
+                self._index_ready = True
+                self._index_settled.notify_all()
+                return True
+
+    def _ensure_index(self) -> None:
+        deadline = time.monotonic() + VAULT_LIST_TIMEOUT_SECONDS
+        with self._state:
+            self._require_unlocked()
+            while self._index_loads and not self._index_ready:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise PublicError("Bitwarden took too long to respond")
+                self._index_settled.wait(remaining)
+                self._require_unlocked()
+            if self._index_ready:
+                return
+            generation = self._generation
+        with self._pending_index_load():
+            self._load_index(generation)
+
+    def _warm_index_in_background(self, generation: int) -> None:
+        def warm() -> None:
+            try:
+                self._load_index(generation)
+            except PublicError:
+                pass
+            finally:
+                with self._state:
+                    self._index_loads -= 1
+                    self._index_settled.notify_all()
+
+        with self._state:
+            self._index_loads += 1
+        threading.Thread(target=warm, name="omawarden-index-warmup", daemon=True).start()
 
     def _vault_item(self, item_id: str) -> dict[str, Any]:
         if not item_id or len(item_id) > MAX_ITEM_ID_CHARS:
             raise PublicError("That vault entry is no longer available")
-        if not self._index_ready:
-            self._load_index()
-        for item, _haystack in self._item_index:
-            if item["id"] == item_id:
-                return item
-        raise PublicError("That vault entry is no longer available")
+        while True:
+            with self._state:
+                self._require_unlocked()
+                if self._index_ready:
+                    for item, _haystack in self._item_index:
+                        if item["id"] == item_id:
+                            return item
+                    raise PublicError("That vault entry is no longer available")
+            self._ensure_index()
 
     def dependencies(self) -> dict[str, bool]:
         try:
@@ -881,88 +921,104 @@ class Agent:
             "wlCopy": bool(resolve_executable("wl-copy")),
         }
 
+    def _cached_status(self, *, force: bool) -> tuple[dict[str, Any] | None, tuple[Any, ...] | None]:
+        with self._state:
+            now = time.monotonic()
+            # This process owns the only session OmaWarden can use, so an unlocked
+            # status stays authoritative until an action, configuration change, or
+            # automatic lock clears it.
+            cache_is_fresh = now - self._status_cached_at < STATUS_CACHE_SECONDS
+            profile = self._status_profile_signature() if not self.session else None
+            cache_is_fresh = cache_is_fresh and (self._status_profile is None or profile == self._status_profile)
+            profile_is_fresh = (
+                profile is not None and profile == self._status_profile
+                and now - self._status_cached_at < STATUS_PROFILE_CACHE_SECONDS
+            )
+            if not force and self._status_cache is not None and (self.session or cache_is_fresh or profile_is_fresh):
+                cached = dict(self._status_cache)
+                cached["dependencies"] = dict(self._status_cache.get("dependencies") or {})
+                return cached, profile
+            return None, profile
+
     def status(self, *, force: bool = False) -> dict[str, Any]:
-        now = time.monotonic()
-        # This process owns the only session OmaWarden can use, so an unlocked
-        # status stays authoritative until an action, configuration change, or
-        # automatic lock clears it. Avoid serializing fast index searches
-        # behind the comparatively slow Node-based `bw status` command.
-        cache_is_fresh = now - self._status_cached_at < STATUS_CACHE_SECONDS
-        profile = self._status_profile_signature() if not self.session else None
-        cache_is_fresh = cache_is_fresh and (self._status_profile is None or profile == self._status_profile)
-        profile_is_fresh = (
-            profile is not None and profile == self._status_profile
-            and now - self._status_cached_at < STATUS_PROFILE_CACHE_SECONDS
-        )
-        if not force and self._status_cache is not None and (self.session or cache_is_fresh or profile_is_fresh):
-            cached = dict(self._status_cache)
-            cached["dependencies"] = dict(self._status_cache.get("dependencies") or {})
+        cached, _profile = self._cached_status(force=force)
+        if cached is not None:
             return cached
-        dependencies = self.dependencies()
-        if not dependencies["bw"]:
-            self._drop_session()
-            response = {
-                "ok": True,
-                "installed": False,
-                "dependencies": dependencies,
-                "status": "unavailable",
-                "statusText": "Bitwarden CLI isn't installed",
-            }
-            self._status_cache = response
-            self._status_cached_at = now
-            return dict(response)
-        try:
-            completed = self._bw("status", "--raw", timeout=10, session=bool(self.session))
-            payload = self._json(completed, "Couldn't read the vault status")
-        except PublicError:
-            self._drop_session()
-            raise
-        state = str(payload.get("status") or "unauthenticated") if isinstance(payload, dict) else "unauthenticated"
-        labels = {
-            "unlocked": "Vault unlocked",
-            "locked": "Vault locked",
-            "unauthenticated": "Sign in required",
-        }
-        if state not in labels:
-            state = "error"
-        # A usable unlocked state must be backed by the session held here. The
-        # CLI cannot safely donate an unknown session from elsewhere.
-        if state == "unlocked" and not self.session:
-            state = "locked"
-        if state != "unlocked":
-            self._drop_session()
-        reported_server = str(payload.get("serverUrl") or "") if isinstance(payload, dict) else ""
-        if reported_server:
+        with self._cli:
+            cached, profile = self._cached_status(force=force)
+            if cached is not None:
+                return cached
+            dependencies = self.dependencies()
+            if not dependencies["bw"]:
+                self._drop_session()
+                response = {
+                    "ok": True,
+                    "installed": False,
+                    "dependencies": dependencies,
+                    "status": "unavailable",
+                    "statusText": "Bitwarden CLI isn't installed",
+                }
+                with self._state:
+                    self._status_cache = response
+                    self._status_cached_at = time.monotonic()
+                return dict(response)
+            with self._state:
+                generation = self._generation
+                session = self.session
             try:
-                reported_server = safe_url(reported_server)
+                reply = self._bw("status", failure="Couldn't read the vault status", session=session, timeout=10)
             except PublicError:
-                reported_server = ""
-        response = {
-            "ok": True,
-            "installed": True,
-            "dependencies": dependencies,
-            "status": state,
-            "statusText": labels.get(state, "Bitwarden status unknown"),
-            "lastSync": _display_text(payload.get("lastSync"), "", 128) if isinstance(payload, dict) else "",
-            "serverUrl": reported_server,
-        }
-        self._status_cache = response
-        # Cache from completion, not from before the potentially slow CLI
-        # call. Real `bw status` can take several seconds; using the earlier
-        # timestamp made every queued monitor immediately repeat the work.
-        self._status_cached_at = time.monotonic()
-        # A concurrent writer (or a CLI migration) must not make an old
-        # response look current. Cache only a profile unchanged during the call.
-        self._status_profile = profile if profile == self._status_profile_signature() else None
-        return dict(response, dependencies=dict(dependencies))
+                with self._state:
+                    if generation == self._generation:
+                        self._drop_session()
+                raise
+            payload = reply.get("template")
+            state = str(payload.get("status") or "unauthenticated") if isinstance(payload, dict) else "unauthenticated"
+            labels = {
+                "unlocked": "Vault unlocked",
+                "locked": "Vault locked",
+                "unauthenticated": "Sign in required",
+            }
+            if state not in labels:
+                state = "error"
+            reported_server = str(payload.get("serverUrl") or "") if isinstance(payload, dict) else ""
+            if reported_server:
+                try:
+                    reported_server = safe_url(reported_server)
+                except PublicError:
+                    reported_server = ""
+            with self._state:
+                # A usable unlocked state must be backed by the session held here. The
+                # CLI cannot safely donate an unknown session from elsewhere.
+                if state == "unlocked" and not self.session:
+                    state = "locked"
+                if state != "unlocked" and generation == self._generation:
+                    self._drop_session()
+                response = {
+                    "ok": True,
+                    "installed": True,
+                    "dependencies": dependencies,
+                    "status": state,
+                    "statusText": labels.get(state, "Bitwarden status unknown"),
+                    "lastSync": _display_text(payload.get("lastSync"), "", 128) if isinstance(payload, dict) else "",
+                    "serverUrl": reported_server,
+                }
+                self._status_cache = response
+                self._status_cached_at = time.monotonic()
+                # A concurrent writer (or a CLI migration) must not make an old
+                # response look current. Cache only a profile unchanged during the call.
+                self._status_profile = profile if profile == self._status_profile_signature() else None
+                return dict(response, dependencies=dict(dependencies))
 
     def _unlock_with_password(self, password: bytearray) -> dict[str, Any]:
         fifo: Path | None = None
         fifo_descriptor = -1
         response: dict[str, Any] | None = None
+        generation = 0
         try:
             self._clear_index()
-            self._clear_status_cache()
+            with self._state:
+                self._clear_status_cache()
             dependencies = self.dependencies()
             if not dependencies["bw"]:
                 raise PublicError("The Bitwarden CLI (bw) isn't installed")
@@ -987,30 +1043,23 @@ class Agent:
                     raise PublicError("The master password couldn't be handed to Bitwarden")
                 written += count
             os.write(fifo_descriptor, b"\n")
-            argv = self.config.bw_argv() + ["unlock", "--raw", "--nointeraction", "--passwordfile", str(fifo)]
-            try:
-                completed = _run_captured(
-                    argv,
-                    env=self.config.environment(),
+            with self._cli:
+                reply = self._bw(
+                    "unlock", "--passwordfile", str(fifo),
+                    failure="That master password didn't work",
                     timeout=45,
+                    timeout_message="Unlocking took too long. Try again.",
                 )
-            except FileNotFoundError as exc:
-                raise PublicError("The Bitwarden CLI (bw) isn't installed") from exc
-            except subprocess.TimeoutExpired as exc:
-                raise PublicError("Unlocking took too long. Try again.") from exc
-            if completed.returncode != 0:
-                raise PublicError("That master password didn't work")
-            try:
-                session = completed.stdout.decode("utf-8", errors="strict").strip()
-            except UnicodeDecodeError as exc:
-                raise PublicError("Bitwarden returned an unusable session") from exc
-            if not session or any(character.isspace() for character in session):
-                raise PublicError("Bitwarden returned an unusable session")
-            self.session = session
-            self._clear_status_cache()
-            self._touch()
-            # Syncing remains the panel's job so unlock can release the secret
-            # inputs first. That sync warms the index before it reports done.
+                session = reply.get("raw")
+                if not isinstance(session, str) or not session or any(character.isspace() for character in session):
+                    raise PublicError("Bitwarden returned an unusable session")
+                with self._state:
+                    self.session = session
+                    self._generation += 1
+                    generation = self._generation
+                    self._clear_index()
+                    self._clear_status_cache()
+                    self._touch()
             response = {"ok": True, "status": "unlocked", "message": "Vault unlocked"}
         finally:
             for index in range(len(password)):
@@ -1024,11 +1073,7 @@ class Agent:
                     pass
         if response is None:
             raise PublicError("Unlocking didn't return a usable response")
-        # With server sync disabled there is no follow-up action to hide the
-        # cold CLI load, so prepare the index now, after the password and FIFO
-        # have both been cleared.
-        if not self.config.sync_on_unlock:
-            response["indexReady"] = self._warm_index()
+        self._warm_index_in_background(generation)
         return response
 
     def unlock(self) -> dict[str, Any]:
@@ -1044,10 +1089,12 @@ class Agent:
     def lock(self, *, automatic: bool = False) -> dict[str, Any]:
         # Wipe local capability state before waiting on the external CLI. Even
         # a broken or hung `bw lock` cannot prolong access through this agent.
-        self._drop_session()
+        generation = self._drop_session()
         try:
             if self.dependencies()["bw"]:
-                self._bw("lock", "--quiet", "--nointeraction", timeout=15)
+                with self._cli:
+                    if generation == self._generation:
+                        self._bw("lock", failure="Bitwarden couldn't lock", timeout=15)
         except PublicError:
             pass
         return {
@@ -1058,37 +1105,57 @@ class Agent:
 
     def logout(self) -> dict[str, Any]:
         self._stop_clipboards()
-        self._clear_status_cache()
+        with self._state:
+            self._clear_status_cache()
         try:
             if self.dependencies()["bw"]:
-                completed = self._bw("logout", "--quiet", "--nointeraction", timeout=15)
-                if completed.returncode != 0 and self.status().get("status") != "unauthenticated":
-                    raise PublicError("Bitwarden couldn't sign out")
+                with self._cli:
+                    try:
+                        self._bw("logout", failure="Bitwarden couldn't sign out", timeout=15)
+                    except PublicError:
+                        if self.status().get("status") != "unauthenticated":
+                            raise
         finally:
             self._drop_session(forget_recents=True)
         return {"ok": True, "status": "unauthenticated", "message": "Signed out"}
 
     def sync(self) -> dict[str, Any]:
-        self._require_unlocked()
-        completed = self._bw("sync", "--quiet", "--nointeraction", session=True, timeout=60)
-        if completed.returncode != 0:
-            raise PublicError("Sync failed. Check your connection and try again.")
-        self._clear_status_cache()
-        index_ready = self._warm_index()
-        self._touch()
+        with self._cli:
+            with self._state:
+                self._require_unlocked()
+                generation = self._generation
+                session = self.session
+            self._bw("sync", failure="Sync failed. Check your connection and try again.", session=session, timeout=60)
+            with self._state:
+                if generation == self._generation:
+                    self._clear_status_cache()
+            with self._pending_index_load():
+                try:
+                    index_ready = self._load_index(generation)
+                except PublicError:
+                    with self._state:
+                        if generation == self._generation:
+                            self._clear_index()
+                    index_ready = False
+        with self._state:
+            if generation != self._generation:
+                raise PublicError("The vault is locked")
+            self.last_access = time.monotonic()
         return {"ok": True, "message": "Vault synced", "indexReady": index_ready}
 
     def search(self, query: str) -> dict[str, Any]:
-        self._require_unlocked()
         clean_query = query.strip()[:512]
-        if not self._index_ready:
-            self._load_index()
-        self._touch()
-        if clean_query:
-            items = search_index(self._item_index, clean_query, self.config.result_limit)
-        else:
-            items = browse_index(self._item_index, self._recent_ids, self.config.result_limit)
-        return {"ok": True, "query": clean_query, "items": items}
+        while True:
+            with self._state:
+                self._require_unlocked()
+                if self._index_ready:
+                    self.last_access = time.monotonic()
+                    if clean_query:
+                        items = search_index(self._item_index, clean_query, self.config.result_limit)
+                    else:
+                        items = browse_index(self._item_index, self._recent_ids, self.config.result_limit)
+                    return {"ok": True, "query": clean_query, "items": items}
+            self._ensure_index()
 
     def copy(self, item_id: str, field: str) -> dict[str, Any]:
         self._require_unlocked()
@@ -1114,6 +1181,37 @@ class Agent:
         if not wl_copy:
             raise PublicError("wl-clipboard isn't installed, so nothing can be copied")
 
+        with self._cli:
+            with self._state:
+                self._require_unlocked()
+                generation = self._generation
+                session = self.session
+            clipboard = self._copy_to_clipboard(item_id, item_type, field, session, wl_copy)
+            with self._state:
+                if generation != self._generation:
+                    _terminate_process(clipboard)
+                    raise PublicError("The vault is locked")
+                if clipboard.poll() is None:
+                    with self._clipboard_lock:
+                        self.clipboards.add(clipboard)
+                    timer = threading.Timer(self.config.clipboard_timeout_sec, self._expire_clipboard, args=(clipboard,))
+                    timer.daemon = True
+                    timer.start()
+                self.last_access = time.monotonic()
+                self._remember_recent(item_id)
+        labels = {
+            "totp": "Code",
+            "number": "Card number",
+            "cardholder": "Cardholder",
+            "cardCode": "Security code",
+            "expiry": "Expiry",
+        }
+        label = labels.get(field, field.capitalize())
+        return {"ok": True, "message": f"{label} copied", "field": field}
+
+    def _copy_to_clipboard(
+        self, item_id: str, item_type: Any, field: str, session: str, wl_copy: str,
+    ) -> subprocess.Popen[bytes]:
         # A Wayland seat has one current clipboard. Retiring the old owner first
         # also bounds process/timer growth during repeated copy shortcuts.
         self._stop_clipboards()
@@ -1126,7 +1224,7 @@ class Agent:
                 self.config.bw_argv() + ["get"] + bw_arguments + ["--raw", "--nointeraction"],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.DEVNULL,
-                env=self.config.environment(self.session),
+                env=self.config.environment(session),
                 start_new_session=True,
             )
             if bw_process.stdout is None:
@@ -1183,35 +1281,18 @@ class Agent:
 
         if clipboard is None:
             raise PublicError("The secure clipboard couldn't be opened")
-
-        if clipboard.poll() is None:
-            with self._clipboard_lock:
-                self.clipboards.add(clipboard)
-            timer = threading.Timer(self.config.clipboard_timeout_sec, self._expire_clipboard, args=(clipboard,))
-            timer.daemon = True
-            timer.start()
-        self._touch()
-        self._remember_recent(item_id)
-        labels = {
-            "totp": "Code",
-            "number": "Card number",
-            "cardholder": "Cardholder",
-            "cardCode": "Security code",
-            "expiry": "Expiry",
-        }
-        label = labels.get(field, field.capitalize())
-        return {"ok": True, "message": f"{label} copied", "field": field}
+        return clipboard
 
     def configure_server(self, url: str) -> dict[str, Any]:
         state = self.status().get("status")
         if state != "unauthenticated":
             raise PublicError("Sign out before changing the server")
         clean = safe_url(url)
-        completed = self._bw("config", "server", clean, "--quiet", "--nointeraction", timeout=30)
-        if completed.returncode != 0:
-            raise PublicError("Bitwarden rejected that server URL")
-        self._clear_index()
-        self._clear_status_cache()
+        with self._cli:
+            self._bw("config", "server", clean, failure="Bitwarden rejected that server URL", timeout=30)
+        with self._state:
+            self._clear_index()
+            self._clear_status_cache()
         return {"ok": True, "message": "Server set to " + urllib.parse.urlparse(clean).netloc, "serverUrl": clean}
 
     def open_url(self, url: str, item_id: str = "") -> dict[str, Any]:
@@ -1227,8 +1308,9 @@ class Agent:
             subprocess.Popen([launcher, clean], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
         except OSError as exc:
             raise PublicError("The browser couldn't be opened") from exc
-        self._remember_recent(item_id)
-        self._touch()
+        with self._state:
+            self._remember_recent(item_id)
+            self.last_access = time.monotonic()
         return {"ok": True, "message": "Opened " + urllib.parse.urlparse(clean).netloc}
 
     def _require_unlocked(self) -> None:
@@ -1247,37 +1329,36 @@ class Agent:
             self._expire_clipboard(process)
 
     def maybe_auto_lock(self) -> None:
-        minutes = self.config.auto_lock_minutes
-        if self.session and minutes > 0 and time.monotonic() - self.last_access >= minutes * 60:
-            try:
-                self.lock(automatic=True)
-            except PublicError:
-                self.session = ""
-                self._clear_index()
+        with self._state:
+            minutes = self.config.auto_lock_minutes
+            due = bool(self.session) and minutes > 0 and time.monotonic() - self.last_access >= minutes * 60
+        if due:
+            self.lock(automatic=True)
 
     def dispatch(self, request: Any, password: bytearray | None = None) -> dict[str, Any]:
         if not isinstance(request, dict):
             raise PublicError("Invalid request")
-        self.last_request = time.monotonic()
         next_config = Config.from_request(request.get("config"))
-        source_changed = (
-            next_config.bw_command != self.config.bw_command
-            or next_config.app_data_dir != self.config.app_data_dir
-        )
-        projection_changed = next_config.show_usernames != self.config.show_usernames
-        config_changed = next_config != self.config
-        if source_changed:
-            # A session belongs to one CLI/profile. Never carry it into a
-            # different command or BITWARDENCLI_APPDATA_DIR.
-            self._drop_session(forget_recents=True)
-        if source_changed or projection_changed:
-            self._clear_index()
-        if config_changed:
-            self._clear_status_cache()
-        self.config = next_config
+        with self._state:
+            self.last_request = time.monotonic()
+            source_changed = (
+                next_config.bw_command != self.config.bw_command
+                or next_config.app_data_dir != self.config.app_data_dir
+            )
+            projection_changed = next_config.show_usernames != self.config.show_usernames
+            config_changed = next_config != self.config
+            if source_changed:
+                # A session belongs to one CLI/profile. Never carry it into a
+                # different command or BITWARDENCLI_APPDATA_DIR.
+                self._drop_session(forget_recents=True)
+            if source_changed or projection_changed:
+                self._clear_index()
+            if config_changed:
+                self._clear_status_cache()
+            self.config = next_config
         action = str(request.get("action") or "")
         if action == "status":
-            return self.status(force=request.get("force") is True)
+            return dict(self.status(force=request.get("force") is True), socket=str(socket_path()))
         if action == "unlock":
             return self.unlock()
         if action == "unlock-with-password":
@@ -1304,7 +1385,8 @@ class Agent:
         raise PublicError("OmaWarden doesn't know that action")
 
     def idle_without_session(self) -> bool:
-        return not self.session and time.monotonic() - self.last_request >= AGENT_IDLE_EXIT_SECONDS
+        with self._state:
+            return not self.session and time.monotonic() - self.last_request >= AGENT_IDLE_EXIT_SECONDS
 
 
 def _peer_is_current_user(connection: socket.socket) -> bool:
@@ -1365,6 +1447,70 @@ def _open_lock_file(path: Path) -> int:
         raise
 
 
+def _serve_client(
+    agent: Agent, connection: socket.socket, stop: threading.Event, slots: threading.BoundedSemaphore,
+) -> None:
+    try:
+        with connection:
+            connection.settimeout(CLIENT_IO_TIMEOUT_SECONDS)
+            stream = connection.makefile("rwb", buffering=0)
+            password: bytearray | None = None
+            response: dict[str, Any]
+            try:
+                line = stream.readline(MAX_REQUEST_BYTES + 1)
+                if len(line) > MAX_REQUEST_BYTES:
+                    response = {"ok": False, "error": "Request is too large"}
+                else:
+                    request = json.loads(line.decode("utf-8"))
+                    if not isinstance(request, dict):
+                        raise PublicError("Invalid request")
+                    if type(request.get("protocolVersion")) is not int or request["protocolVersion"] != PROTOCOL_VERSION:
+                        raise PublicError("OmaWarden was updated; restart the shell and try again")
+                    if request.get("action") == "unlock-with-password":
+                        raw_secret_length = request.get("secretLength")
+                        if type(raw_secret_length) is not int:
+                            raise PublicError("The native unlock request is invalid")
+                        secret_length = raw_secret_length
+                        password = _receive_secret(connection, secret_length)
+                    response = agent.dispatch(request, password)
+            except (json.JSONDecodeError, UnicodeDecodeError):
+                response = {"ok": False, "error": "Invalid request"}
+            except TimeoutError:
+                response = {"ok": False, "error": "Request timed out"}
+            except PublicError as exc:
+                response = {"ok": False, "error": str(exc)}
+            except (BrokenPipeError, ConnectionResetError, OSError):
+                response = {"ok": False, "error": "Request ended early"}
+            # A malformed CLI payload must not take down the long-lived
+            # helper. The detail stays private; the UI gets a safe error.
+            except Exception:  # noqa: BLE001
+                response = {"ok": False, "error": "Something went wrong inside OmaWarden's helper"}
+            finally:
+                if password is not None:
+                    for index in range(len(password)):
+                        password[index] = 0
+            payload = (json.dumps(response, separators=(",", ":")) + "\n").encode("utf-8")
+            if len(payload) > MAX_RESPONSE_BYTES:
+                payload = b'{"ok":false,"error":"Response is too large"}\n'
+            try:
+                stream.write(payload)
+            except (BrokenPipeError, ConnectionResetError, OSError):
+                pass
+            try:
+                stream.close()
+            except OSError:
+                pass
+            if response.get("shutdown"):
+                stop.set()
+    finally:
+        slots.release()
+
+
+def _keep_house(agent: Agent, stop: threading.Event) -> None:
+    while not stop.wait(1.0):
+        agent.maybe_auto_lock()
+
+
 def serve() -> int:
     path = socket_path()
     lock_descriptor = _open_lock_file(lock_path())
@@ -1391,17 +1537,18 @@ def serve() -> int:
         source_mtime = os.stat(__file__).st_mtime_ns
     except OSError:
         source_mtime = 0
-    should_stop = False
+    stop = threading.Event()
 
-    def stop(_signum: int, _frame: Any) -> None:
-        nonlocal should_stop
-        should_stop = True
+    def on_signal(_signum: int, _frame: Any) -> None:
+        stop.set()
 
-    signal.signal(signal.SIGTERM, stop)
-    signal.signal(signal.SIGINT, stop)
+    signal.signal(signal.SIGTERM, on_signal)
+    signal.signal(signal.SIGINT, on_signal)
+    slots = threading.BoundedSemaphore(MAX_CONCURRENT_CLIENTS)
+    clients: list[threading.Thread] = []
+    threading.Thread(target=_keep_house, args=(agent, stop), name="omawarden-housekeeping", daemon=True).start()
     try:
-        while not should_stop:
-            agent.maybe_auto_lock()
+        while not stop.is_set():
             try:
                 source_changed = source_mtime != 0 and os.stat(__file__).st_mtime_ns != source_mtime
             except OSError:
@@ -1412,60 +1559,20 @@ def serve() -> int:
                 connection, _ = server.accept()
             except TimeoutError:
                 continue
-            with connection:
-                if not _peer_is_current_user(connection):
-                    continue
-                connection.settimeout(CLIENT_IO_TIMEOUT_SECONDS)
-                stream = connection.makefile("rwb", buffering=0)
-                password: bytearray | None = None
-                response: dict[str, Any]
-                try:
-                    line = stream.readline(MAX_REQUEST_BYTES + 1)
-                    if len(line) > MAX_REQUEST_BYTES:
-                        response = {"ok": False, "error": "Request is too large"}
-                    else:
-                        request = json.loads(line.decode("utf-8"))
-                        if not isinstance(request, dict):
-                            raise PublicError("Invalid request")
-                        if type(request.get("protocolVersion")) is not int or request["protocolVersion"] != PROTOCOL_VERSION:
-                            raise PublicError("OmaWarden was updated; restart the shell and try again")
-                        if request.get("action") == "unlock-with-password":
-                            raw_secret_length = request.get("secretLength")
-                            if type(raw_secret_length) is not int:
-                                raise PublicError("The native unlock request is invalid")
-                            secret_length = raw_secret_length
-                            password = _receive_secret(connection, secret_length)
-                        response = agent.dispatch(request, password)
-                except (json.JSONDecodeError, UnicodeDecodeError):
-                    response = {"ok": False, "error": "Invalid request"}
-                except TimeoutError:
-                    response = {"ok": False, "error": "Request timed out"}
-                except PublicError as exc:
-                    response = {"ok": False, "error": str(exc)}
-                except (BrokenPipeError, ConnectionResetError, OSError):
-                    response = {"ok": False, "error": "Request ended early"}
-                # A malformed CLI payload must not take down the long-lived
-                # helper. The detail stays private; the UI gets a safe error.
-                except Exception:  # noqa: BLE001
-                    response = {"ok": False, "error": "Something went wrong inside OmaWarden's helper"}
-                finally:
-                    if password is not None:
-                        for index in range(len(password)):
-                            password[index] = 0
-                payload = (json.dumps(response, separators=(",", ":")) + "\n").encode("utf-8")
-                if len(payload) > MAX_RESPONSE_BYTES:
-                    payload = b'{"ok":false,"error":"Response is too large"}\n'
-                try:
-                    stream.write(payload)
-                except (BrokenPipeError, ConnectionResetError, OSError):
-                    pass
-                try:
-                    stream.close()
-                except OSError:
-                    pass
-                if response.get("shutdown"):
-                    should_stop = True
+            if not _peer_is_current_user(connection):
+                connection.close()
+                continue
+            slots.acquire()
+            client = threading.Thread(
+                target=_serve_client, args=(agent, connection, stop, slots), name="omawarden-client", daemon=True,
+            )
+            client.start()
+            clients = [thread for thread in clients if thread.is_alive()] + [client]
     finally:
+        stop.set()
+        drain_deadline = time.monotonic() + CLIENT_DRAIN_SECONDS
+        for client in clients:
+            client.join(max(0.0, drain_deadline - time.monotonic()))
         try:
             agent.lock()
         except PublicError:
@@ -1485,7 +1592,7 @@ def _connect(request: dict[str, Any], timeout: float = 70.0) -> dict[str, Any]:
     payload = _request_payload(request)
     deadline = time.monotonic() + timeout
     last_error: OSError | None = None
-    started = False
+    next_start = 0.0
     while time.monotonic() < deadline:
         client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         client.settimeout(max(1.0, deadline - time.monotonic()))
@@ -1503,16 +1610,16 @@ def _connect(request: dict[str, Any], timeout: float = 70.0) -> dict[str, Any]:
             return response if isinstance(response, dict) else {"ok": False, "error": "Invalid agent response"}
         except (TimeoutError, FileNotFoundError, BrokenPipeError, ConnectionRefusedError, ConnectionResetError) as exc:
             last_error = exc
-            if not started:
+            if time.monotonic() >= next_start:
                 start_agent()
-                started = True
+                next_start = time.monotonic() + AGENT_START_RETRY_SECONDS
             time.sleep(0.05)
         except OSError as exc:
             if exc.errno in {errno.EAGAIN, errno.EINTR, errno.ENOBUFS}:
                 last_error = exc
-                if not started:
+                if time.monotonic() >= next_start:
                     start_agent()
-                    started = True
+                    next_start = time.monotonic() + AGENT_START_RETRY_SECONDS
                 time.sleep(0.05)
                 continue
             raise PublicError("OmaWarden's helper couldn't be reached") from exc
@@ -1526,7 +1633,7 @@ def _connect_secret(request: dict[str, Any], secret: bytearray, timeout: float =
     path = socket_path()
     deadline = time.monotonic() + timeout
     last_error: OSError | None = None
-    started = False
+    next_start = 0.0
     request["secretLength"] = len(secret)
     header = _request_payload(request)
     while time.monotonic() < deadline:
@@ -1547,16 +1654,16 @@ def _connect_secret(request: dict[str, Any], secret: bytearray, timeout: float =
             return response if isinstance(response, dict) else {"ok": False, "error": "Invalid agent response"}
         except (TimeoutError, FileNotFoundError, BrokenPipeError, ConnectionRefusedError, ConnectionResetError) as exc:
             last_error = exc
-            if not started:
+            if time.monotonic() >= next_start:
                 start_agent()
-                started = True
+                next_start = time.monotonic() + AGENT_START_RETRY_SECONDS
             time.sleep(0.05)
         except OSError as exc:
             if exc.errno in {errno.EAGAIN, errno.EINTR, errno.ENOBUFS}:
                 last_error = exc
-                if not started:
+                if time.monotonic() >= next_start:
                     start_agent()
-                    started = True
+                    next_start = time.monotonic() + AGENT_START_RETRY_SECONDS
                 time.sleep(0.05)
                 continue
             raise PublicError("OmaWarden's helper couldn't be reached") from exc
@@ -1637,13 +1744,21 @@ def _pause(message: str = "Press Enter to close this window.") -> None:
 
 def _cli_status(argv: list[str], env: dict[str, str]) -> dict[str, Any]:
     try:
-        completed = subprocess.run(
-            argv + ["status", "--raw"], env=env, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=15, check=False
-        )
-        payload = json.loads(completed.stdout.decode("utf-8"))
-        return payload if isinstance(payload, dict) else {}
-    except (OSError, ValueError, subprocess.TimeoutExpired):
+        response = _run_cli_response(argv + ["status", "--response", "--nointeraction"], env=env, timeout=15)
+    except (OSError, CliOverflow, subprocess.TimeoutExpired):
         return {}
+    data = response.get("data") if isinstance(response, dict) else None
+    payload = data.get("template") if isinstance(data, dict) else None
+    return payload if isinstance(payload, dict) else {}
+
+
+def _retire_printed_session(argv: list[str], env: dict[str, str]) -> None:
+    try:
+        _run_cli_response(argv + ["lock", "--response", "--nointeraction"], env=env, timeout=15)
+    except (OSError, CliOverflow, subprocess.TimeoutExpired):
+        pass
+    sys.stdout.write("\033[H\033[2J\033[3J")
+    sys.stdout.flush()
 
 
 def login_terminal(args: argparse.Namespace) -> int:
@@ -1679,7 +1794,8 @@ def login_terminal(args: argparse.Namespace) -> int:
         print("if enabled, a two-step code.\n")
         completed = subprocess.run(argv + ["login"], env=env, check=False)
         if completed.returncode == 0:
-            print("\nSigned in. Back in the bar, choose Unlock vault.")
+            _retire_printed_session(argv, env)
+            print("Signed in. Back in the bar, choose Unlock vault.")
         else:
             print("\nSign-in didn't complete. Close this window and try again from the bar.")
         _pause()

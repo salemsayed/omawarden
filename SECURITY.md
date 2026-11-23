@@ -53,15 +53,15 @@ the item ID, name, optional username, first safe web URL, favourite flag, type
 and password/TOTP capability flags. For cards it is the item ID, name,
 optional cardholder, brand, last four digits, favourite flag, type and field
 capability flags. Full card numbers, security codes and expiration dates are
-not indexed or returned to QML. Unlock and sync prepare that index before
-their background work reports ready; when sync is disabled, preparation
-starts only after the unlock password and its FIFO have been cleared. The
-metadata stays in memory for the life of the session and is wiped on lock,
-sign-out, profile change, privacy change and exit. It is never written to
-disk. The raw `bw list items --raw` stdout and stderr streams are drained
-concurrently under fixed byte ceilings; exceeding either ceiling terminates
-the whole CLI process group before JSON projection and returns a generic error
-to the panel rather than CLI output.
+not indexed or returned to QML. Unlock prepares that index from the local
+vault only after the unlock password and its FIFO have been cleared, and sync
+replaces it. An index or sync that finishes after a lock, sign-out or profile
+change is discarded. The metadata stays in memory for the life of the session
+and is wiped on lock, sign-out, profile change, privacy change and exit. It is
+never written to disk. The raw `bw list items` stdout and stderr streams are
+drained concurrently under fixed byte ceilings; exceeding either ceiling
+terminates the whole CLI process group before JSON projection and returns a
+generic error to the panel rather than CLI output.
 
 ### Recently used
 
@@ -122,7 +122,9 @@ user.
 
 `bw login` runs in a terminal so credentials and two-step codes go to the
 CLI's own prompt. A configured server URL is applied with `bw config server`
-before login, only while signed out. Sign-out runs `bw logout`, clears the
+before login, only while signed out. `bw login` prints a session key when it
+succeeds, so OmaWarden then locks the CLI, which makes that key useless, and
+clears the terminal screen and scrollback. Sign-out runs `bw logout`, clears the
 clipboard and wipes the session, index and recents.
 
 ### Client certificates

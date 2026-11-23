@@ -34,6 +34,7 @@ if log:
 if not args:
     raise SystemExit(2)
 command = args[0]
+envelope = "--response" in args
 pid_file = os.environ.get("FAKE_BW_PID_FILE")
 if pid_file:
     with open(pid_file, "w", encoding="utf-8") as stream:
@@ -41,16 +42,32 @@ if pid_file:
 delay = os.environ.get("FAKE_BW_DELAY_" + command.upper())
 if delay:
     time.sleep(float(delay))
+
+
+def reply(data, raw):
+    if envelope:
+        sys.stdout.write(json.dumps({"success": True, "data": data}))
+    else:
+        sys.stdout.write(raw)
+    sys.stdout.flush()
+    linger = os.environ.get("FAKE_BW_LINGER")
+    if linger:
+        time.sleep(float(linger))
+
+
 if os.environ.get("FAKE_BW_FAIL_" + command.upper()):
+    if envelope:
+        sys.stdout.write(json.dumps({"success": False, "message": "forced failure"}))
     print("forced failure", file=sys.stderr)
     raise SystemExit(1)
 if command == "status":
-    print(json.dumps({
+    template = {
         "status": "unlocked" if os.environ.get("BW_SESSION") else os.environ.get("FAKE_BW_STATUS", "locked"),
         "serverUrl": "https://vault.example.test",
         "lastSync": "2026-08-20T12:00:00Z",
         "userEmail": "private@example.test"
-    }))
+    }
+    reply({"object": "template", "template": template}, json.dumps(template) + "\n")
 elif command == "list":
     overflow_stream = os.environ.get("FAKE_BW_OVERSIZE_LIST_STREAM")
     if overflow_stream:
@@ -58,7 +75,7 @@ elif command == "list":
         while True:
             stream.write(b"DO_NOT_LEAK_OVERSIZED_VAULT_OUTPUT" * 1024)
             stream.flush()
-    print(json.dumps([{
+    items = [{
         "id": "item-1", "name": "Example", "favorite": True, "type": 1,
         "login": {
             "username": "person@example.test", "password": "DO_NOT_LEAK_PASSWORD",
@@ -74,7 +91,8 @@ elif command == "list":
             "number": "4111111111111111", "code": "999",
             "expMonth": "7", "expYear": "2030"
         }
-    }]))
+    }]
+    reply({"object": "list", "data": items}, json.dumps(items) + "\n")
 elif command == "get":
     if args[1] == "item" and args[2] == "card-1":
         print(json.dumps({
@@ -95,11 +113,16 @@ elif command == "unlock":
     with open(path, "rb", buffering=0) as stream:
         password = stream.readline().rstrip(b"\n")
     if password != b"correct horse battery staple":
+        if envelope:
+            sys.stdout.write(json.dumps({"success": False, "message": "Invalid master password."}))
         print("bad password", file=sys.stderr)
         raise SystemExit(1)
-    print("SESSION_KEY_FOR_TESTS")
+    reply({"object": "message", "title": "Your vault is now unlocked!", "raw": "SESSION_KEY_FOR_TESTS"},
+          "SESSION_KEY_FOR_TESTS\n")
+elif command == "login":
+    print('$ export BW_SESSION="SESSION_PRINTED_BY_LOGIN"')
 elif command in {"sync", "lock", "logout", "config"}:
-    pass
+    reply({"object": "message", "title": command + " done"}, "")
 else:
     print("unsupported", file=sys.stderr)
     raise SystemExit(2)
@@ -145,6 +168,7 @@ class AgentTests(unittest.TestCase):
         self.environment = mock.patch.dict(os.environ, {
             "PATH": str(self.bin_dir) + os.pathsep + os.environ.get("PATH", ""),
             "XDG_RUNTIME_DIR": str(self.directory),
+            "XDG_CACHE_HOME": str(self.directory / "cache"),
             "FAKE_CLIPBOARD": str(self.clipboard),
             "FAKE_WL_COPY_ARGS": str(self.copy_args),
             "FAKE_BW_LOG": str(self.bw_log),
@@ -188,7 +212,7 @@ class AgentTests(unittest.TestCase):
         for stream in ("stdout", "stderr"):
             with self.subTest(stream=stream), \
                  mock.patch.object(AGENT, "MAX_VAULT_LIST_STDOUT_BYTES", 4096), \
-                 mock.patch.object(AGENT, "MAX_VAULT_LIST_STDERR_BYTES", 4096), \
+                 mock.patch.object(AGENT, "MAX_CLI_STDERR_BYTES", 4096), \
                  mock.patch.dict(os.environ, {"FAKE_BW_OVERSIZE_LIST_STREAM": stream}):
                 with self.assertRaisesRegex(AGENT.PublicError, "Couldn't load the vault") as caught:
                     self.agent.search("")
@@ -602,6 +626,27 @@ class AgentTests(unittest.TestCase):
                 env=environment,
             )
 
+    def test_a_request_accepted_during_shutdown_is_still_answered(self) -> None:
+        config = {"bwCommand": str(self.bw)}
+        environment = dict(os.environ, FAKE_BW_DELAY_STATUS="1")
+
+        def request(action: str, **extra: Any) -> subprocess.Popen[str]:
+            process = subprocess.Popen(
+                [sys.executable, str(ROOT / "omawarden-agent.py"), "request"],
+                stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=environment,
+            )
+            assert process.stdin is not None
+            process.stdin.write(json.dumps({"action": action, "config": config, **extra}) + "\n")
+            process.stdin.flush()
+            return process
+
+        warm = request("status")
+        self.assertTrue(json.loads(warm.communicate(timeout=10)[0])["ok"])
+        self.assertTrue(json.loads(request("shutdown").communicate(timeout=10)[0])["shutdown"])
+        late = request("status", force=True)
+        stdout, stderr = late.communicate(timeout=15)
+        self.assertEqual(json.loads(stdout)["status"], "locked", stderr)
+
     def test_projection_keeps_login_and_card_items(self) -> None:
         rows = AGENT.project_item_metadata([
             {"id": "login", "name": "Login", "type": 1, "login": {"password": "x"}},
@@ -716,7 +761,7 @@ class AgentTests(unittest.TestCase):
         self.assertEqual(self.agent._recent_ids, [])
         self.assertFalse(self.agent._index_ready)
         commands = [json.loads(line) for line in self.bw_log.read_text(encoding="utf-8").splitlines()]
-        self.assertIn(["logout", "--quiet", "--nointeraction"], commands)
+        self.assertIn(["logout", "--response", "--nointeraction"], commands)
 
     def test_copy_and_open_are_restricted_to_projected_item_capabilities(self) -> None:
         self.agent.session = "session"
@@ -999,7 +1044,7 @@ class AgentTests(unittest.TestCase):
         self.agent.maybe_auto_lock()
         self.assertEqual(self.agent.session, "")
         commands = [json.loads(line) for line in self.bw_log.read_text(encoding="utf-8").splitlines()]
-        self.assertIn(["lock", "--quiet", "--nointeraction"], commands)
+        self.assertIn(["lock", "--response", "--nointeraction"], commands)
 
         self.agent.last_request = time.monotonic() - AGENT.AGENT_IDLE_EXIT_SECONDS - 1
         self.assertTrue(self.agent.idle_without_session())
@@ -1073,23 +1118,92 @@ class AgentTests(unittest.TestCase):
         with mock.patch.object(AGENT, "pinentry_executable", return_value="fake-pinentry"), \
              mock.patch.object(AGENT, "obtain_master_password", return_value=password):
             self.agent.unlock()
+        self.agent.search("")
         commands = [json.loads(line) for line in self.bw_log.read_text(encoding="utf-8").splitlines()]
         self.assertFalse(any(command[:1] == ["sync"] for command in commands))
 
-    def test_unlock_without_sync_warms_only_after_secret_inputs_are_cleared(self) -> None:
-        self.agent.config.sync_on_unlock = False
+    def test_unlock_warms_the_index_in_the_background_after_secret_inputs_are_cleared(self) -> None:
+        for sync_on_unlock in (True, False):
+            with self.subTest(sync_on_unlock=sync_on_unlock):
+                self._assert_unlock_warms_after_wipe(sync_on_unlock)
+
+    def _assert_unlock_warms_after_wipe(self, sync_on_unlock: bool) -> None:
+        self.agent.lock()
+        self.agent.config.sync_on_unlock = sync_on_unlock
         password = bytearray(b"correct horse battery staple")
         original_load = self.agent._load_index
+        observed: list[tuple[bytes, list[Path]]] = []
 
-        def checked_load() -> None:
-            self.assertEqual(password, bytearray(len(password)))
-            self.assertEqual(list(self.directory.glob("omawarden-password-*")), [])
-            original_load()
+        def checked_load(generation: int) -> bool:
+            observed.append((bytes(password), list(self.directory.glob("omawarden-password-*"))))
+            return original_load(generation)
 
         with mock.patch.object(self.agent, "_load_index", side_effect=checked_load):
             response = self.agent.unlock_with_password(password)
-        self.assertTrue(response["indexReady"])
-        self.assertTrue(self.agent._index_ready)
+            self.assertEqual(self.agent.search("")["items"][0]["id"], "item-1")
+        self.assertEqual(response["status"], "unlocked")
+        self.assertEqual(observed, [(bytes(len(password)), [])])
+
+    def test_bitwarden_cli_reuses_a_private_node_compile_cache(self) -> None:
+        cache = self.directory / "cache" / "omawarden" / "node-compile-cache"
+        self.assertEqual(self.agent.config.environment()["NODE_COMPILE_CACHE"], str(cache))
+        self.assertEqual(stat.S_IMODE(cache.stat().st_mode), 0o700)
+        with mock.patch.dict(os.environ, {"NODE_COMPILE_CACHE": "/chosen/by/user"}):
+            self.assertEqual(self.agent.config.environment()["NODE_COMPILE_CACHE"], "/chosen/by/user")
+        cache.chmod(0o755)
+        self.assertNotIn("NODE_COMPILE_CACHE", self.agent.config.environment())
+
+    def test_cli_replies_are_used_before_the_cli_exits_and_the_cli_is_reaped(self) -> None:
+        def wait_until_gone(pid: int, seconds: float) -> bool:
+            deadline = time.monotonic() + seconds
+            while time.monotonic() < deadline:
+                try:
+                    os.kill(pid, 0)
+                except ProcessLookupError:
+                    return True
+                time.sleep(0.05)
+            return False
+
+        with mock.patch.dict(os.environ, {"FAKE_BW_LINGER": "1.5"}):
+            began = time.monotonic()
+            self.assertEqual(self.agent.status(force=True)["status"], "locked")
+            self.assertLess(time.monotonic() - began, 1.2)
+            pid = int(self.bw_pid.read_text(encoding="utf-8"))
+            self.assertTrue(wait_until_gone(pid, 5))
+        with mock.patch.dict(os.environ, {"FAKE_BW_LINGER": "30"}), \
+             mock.patch.object(AGENT, "CLI_EXIT_GRACE_SECONDS", 0.2):
+            self.assertEqual(self.agent.status(force=True)["status"], "locked")
+            pid = int(self.bw_pid.read_text(encoding="utf-8"))
+            self.assertTrue(wait_until_gone(pid, 5))
+
+    def test_search_answers_from_memory_during_sync_and_lock_discards_the_sync(self) -> None:
+        self.agent.session = "session"
+        self.agent.search("")
+        outcome: dict[str, Any] = {}
+
+        def run_sync() -> None:
+            try:
+                outcome["sync"] = self.agent.sync()
+            except AGENT.PublicError as exc:
+                outcome["error"] = str(exc)
+
+        with mock.patch.dict(os.environ, {"FAKE_BW_DELAY_SYNC": "1.5"}):
+            syncing = threading.Thread(target=run_sync)
+            syncing.start()
+            time.sleep(0.3)
+            began = time.monotonic()
+            self.assertEqual(self.agent.search("exam")["items"][0]["id"], "item-1")
+            self.assertLess(time.monotonic() - began, 0.5)
+            locking = threading.Thread(target=self.agent.lock)
+            locking.start()
+            time.sleep(0.2)
+            self.assertTrue(syncing.is_alive())
+            self.assertEqual(self.agent.session, "")
+            self.assertEqual(self.agent._item_index, [])
+            syncing.join(10)
+            locking.join(10)
+        self.assertEqual(outcome, {"error": "The vault is locked"})
+        self.assertFalse(self.agent._index_ready)
 
     def test_sign_in_terminal_applies_the_configured_server_first(self) -> None:
         args = AGENT.build_parser().parse_args([
@@ -1097,14 +1211,19 @@ class AgentTests(unittest.TestCase):
         ])
         with mock.patch.dict(os.environ, {"FAKE_BW_STATUS": "unauthenticated"}), \
              mock.patch("builtins.input", return_value=""), \
-             mock.patch("sys.stdout"):
-            AGENT.login_terminal(args)
+             mock.patch("sys.stdout") as terminal:
+            self.assertEqual(AGENT.login_terminal(args), 0)
         commands = [json.loads(line) for line in self.bw_log.read_text(encoding="utf-8").splitlines()]
         config_calls = [index for index, command in enumerate(commands) if command[:3] == ["config", "server", "https://eu.example.test"]]
         login_calls = [index for index, command in enumerate(commands) if command == ["login"]]
+        lock_calls = [index for index, command in enumerate(commands) if command[:1] == ["lock"]]
         self.assertEqual(len(config_calls), 1)
         self.assertEqual(len(login_calls), 1)
         self.assertLess(config_calls[0], login_calls[0])
+        self.assertEqual(len(lock_calls), 1)
+        self.assertLess(login_calls[0], lock_calls[0])
+        written = "".join(str(call.args[0]) for call in terminal.write.call_args_list if call.args)
+        self.assertIn("\033[3J", written)
 
     def test_sign_in_terminal_skips_bw_login_when_already_signed_in(self) -> None:
         args = AGENT.build_parser().parse_args(["login-terminal", "--bw-command", str(self.bw)])

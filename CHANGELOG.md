@@ -1,5 +1,34 @@
 # Changelog
 
+## 1.2.0 - 2026-11-23
+
+Measured on a 911-item test vault with the same Bitwarden CLI (2026.2.0),
+median of repeated runs, against 1.1.8:
+
+- Results appear 3.7 seconds after you enter the master password, down from
+  9.4. Right after unlock the helper builds its search index from the vault on
+  disk, then syncs in the background.
+- Search answers in about a millisecond, down from 79 ms. The panel sends
+  searches straight to the helper's socket instead of starting a helper
+  process for every keystroke, and falls back to the process if the socket
+  can't be reached. The search debounce is 30 ms, down from 90.
+- Searching while a sync runs answers at once instead of waiting up to six
+  seconds for the sync to finish. The helper serves each request on its own
+  thread and runs Bitwarden CLI commands one at a time.
+- A manual sync takes 3.5 seconds, down from 6.2; a status check 1.0, down
+  from 3.0; locking 1.2, down from 2.9. The CLI keeps running for one to two
+  seconds after it has answered, so the helper takes each answer as soon as
+  it is complete and lets the process exit in the background. The CLI also
+  gets a private Node compile cache.
+- Lock wipes the session, index and clipboard at once, even while a sync is
+  running, and a sync that finishes after a lock is discarded.
+- `bw login` prints a session key when it succeeds. The sign-in terminal now
+  locks the CLI right after, so that key no longer works, and clears the
+  screen and scrollback.
+- A helper that is shutting down still answers requests it has already
+  accepted, and clients keep retrying to start a fresh helper, so an update
+  no longer strands a request.
+
 ## 1.1.8 - 2026-10-21
 
 - Self-hosted servers behind mutual TLS work with a client certificate.

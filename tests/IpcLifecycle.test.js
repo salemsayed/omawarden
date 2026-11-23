@@ -88,7 +88,9 @@ test("empty vault copy waits for the current panel search to finish", () => {
   assert.match(panelSource, /function onUnlockedChanged\(\) \{\s+root\.searchReady = false/)
   assert.match(panelSource, /function onSearchCompleted\(\)[\s\S]*root\.opened && bitwarden\.unlocked[\s\S]*root\.searchReady = true/)
   assert.match(panelSource, /text: root\.searchLoading\s+\? \(root\.browsing \? "Loading your vault…" : "Searching…"\)/)
-  assert.match(serviceSource, /if \(root\._searchQueued\)[\s\S]*root\.search\(next\)[\s\S]*else if \(!cancelled\) root\.searchCompleted\(\)/)
+  assert.match(serviceSource, /function finishSearch\(\) \{[\s\S]*if \(_searchQueued\)[\s\S]*search\(next\)[\s\S]*else if \(!cancelled\) searchCompleted\(\)/)
+  assert.match(serviceSource, /id: searchProcess[\s\S]*onExited: root\.finishSearch\(\)/)
+  assert.match(serviceSource, /id: searchSocket[\s\S]*root\.applySearch\(data\)\s+root\.finishSearch\(\)/)
 })
 
 test("opening searches the warm local index without waiting for a status poll", () => {

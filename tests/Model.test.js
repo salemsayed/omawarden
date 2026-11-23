@@ -262,3 +262,8 @@ test("durations read as people say them", () => {
   assert.equal(Model.secondsLabel(30), "30 s")
   assert.equal(Model.secondsLabel(120), "2 min")
 })
+
+test("the panel speaks the agent's protocol version", () => {
+  const source = require("node:fs").readFileSync(require("node:path").join(__dirname, "..", "omawarden-agent.py"), "utf8")
+  assert.equal(Model.protocolVersion, Number(source.match(/^PROTOCOL_VERSION = (\d+)$/m)[1]))
+})

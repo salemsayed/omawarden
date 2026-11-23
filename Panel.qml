@@ -330,7 +330,7 @@ Panel {
     id: searchDebounce
     // The agent searches a warm, metadata-only memory index. A short debounce
     // absorbs key-repeat noise without making normal typing feel delayed.
-    interval: 90
+    interval: 30
     onTriggered: if (root.opened && bitwarden.unlocked && !root.settingsOpen) bitwarden.search(root.query)
   }
 
