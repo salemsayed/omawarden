@@ -2,8 +2,8 @@
 """Local, secret-isolating backend for the OmaWarden Omarchy plugin.
 
 The Quickshell UI only receives vault metadata. The session key stays in this
-agent's memory and copied secrets travel directly from `bw` to a sensitive
-Wayland clipboard without crossing Python or QML stdout.
+agent's memory and copied secrets travel from `bw` through a short-lived field
+filter to a sensitive Wayland clipboard, never through the agent or QML.
 """
 
 from __future__ import annotations
@@ -445,7 +445,6 @@ def browse_index(
 
 
 def card_field_value(item: Any, field: str) -> str:
-    """Extract one copyable value inside the short-lived card filter process."""
     if not isinstance(item, dict) or item.get("type") != CARD_ITEM_TYPE:
         raise PublicError("That vault entry is not a card")
     raw_card = item.get("card")
@@ -473,16 +472,42 @@ def card_field_value(item: Any, field: str) -> str:
     return value[:4096]
 
 
-def extract_card_field(args: argparse.Namespace) -> int:
-    """Filter `bw get item` output without exposing the full item to the agent."""
+def copy_field_value(response: Any, field: str) -> str:
+    if not isinstance(response, dict) or response.get("success") is not True:
+        raise PublicError("Bitwarden couldn't read that value")
+    data = response.get("data")
+    if field in CARD_COPY_FIELDS:
+        return card_field_value(data, field)
+    if not isinstance(data, dict) or data.get("object") != "string" or not isinstance(data.get("data"), str):
+        raise PublicError("Bitwarden returned an unexpected value")
+    if not data["data"]:
+        raise PublicError("That field is empty")
+    return data["data"]
+
+
+def read_cli_response(descriptor: int) -> Any:
+    output = bytearray()
     try:
-        raw = sys.stdin.buffer.read(MAX_RESPONSE_BYTES + 1)
-        if len(raw) > MAX_RESPONSE_BYTES:
-            raise PublicError("The card entry is too large")
-        item = json.loads(raw.decode("utf-8"))
-        sys.stdout.write(card_field_value(item, args.field))
+        while len(output) <= MAX_RESPONSE_BYTES:
+            chunk = os.read(descriptor, 64 * 1024)
+            if not chunk:
+                break
+            output.extend(chunk)
+            response = _complete_response(output)
+            if response is not None:
+                return response
+    finally:
+        output[:] = bytes(len(output))
+    raise PublicError("Bitwarden's answer was incomplete")
+
+
+def extract_copy_field(args: argparse.Namespace) -> int:
+    try:
+        value = copy_field_value(read_cli_response(sys.stdin.fileno()), args.field)
+        sys.stdout.buffer.write(value.encode("utf-8"))
+        sys.stdout.close()
         return 0
-    except (json.JSONDecodeError, UnicodeDecodeError, RecursionError, PublicError):
+    except (OSError, UnicodeDecodeError, RecursionError, PublicError):
         return 1
 
 
@@ -1221,7 +1246,8 @@ class Agent:
         try:
             bw_arguments = [field, item_id] if item_type == LOGIN_ITEM_TYPE else ["item", item_id]
             bw_process = subprocess.Popen(
-                self.config.bw_argv() + ["get"] + bw_arguments + ["--raw", "--nointeraction"],
+                self.config.bw_argv() + ["get"] + bw_arguments + ["--response", "--nointeraction"],
+                stdin=subprocess.DEVNULL,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.DEVNULL,
                 env=self.config.environment(session),
@@ -1229,44 +1255,37 @@ class Agent:
             )
             if bw_process.stdout is None:
                 raise PublicError("Bitwarden couldn't open the secure copy pipe")
-            copy_source = bw_process.stdout
-            if item_type == CARD_ITEM_TYPE:
-                filter_process = subprocess.Popen(
-                    [sys.executable, str(Path(__file__).resolve()), "extract-card-field", field],
-                    stdin=bw_process.stdout,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.DEVNULL,
-                    start_new_session=True,
-                )
-                bw_process.stdout.close()
-                if filter_process.stdout is None:
-                    raise PublicError("OmaWarden couldn't open the card copy pipe")
-                copy_source = filter_process.stdout
+            filter_process = subprocess.Popen(
+                [sys.executable, str(Path(__file__).resolve()), "extract-copy-field", field],
+                stdin=bw_process.stdout,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+            bw_process.stdout.close()
+            if filter_process.stdout is None:
+                raise PublicError("OmaWarden couldn't open the copy pipe")
             clipboard = subprocess.Popen(
                 [wl_copy, "--foreground", "--sensitive", "--trim-newline"],
-                stdin=copy_source,
+                stdin=filter_process.stdout,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
                 start_new_session=True,
             )
-            copy_source.close()
-            deadline = time.monotonic() + COPY_TIMEOUT_SECONDS
+            filter_process.stdout.close()
             try:
-                return_code = bw_process.wait(timeout=max(0.01, deadline - time.monotonic()))
-                filter_code = (
-                    filter_process.wait(timeout=max(0.01, deadline - time.monotonic()))
-                    if filter_process is not None else 0
-                )
+                filter_code = filter_process.wait(timeout=COPY_TIMEOUT_SECONDS)
             except subprocess.TimeoutExpired as exc:
                 _terminate_process(clipboard)
-                if filter_process is not None:
-                    _terminate_process(filter_process)
+                _terminate_process(filter_process)
                 _terminate_process(bw_process)
                 raise PublicError("Bitwarden took too long to copy that value") from exc
-            if return_code != 0 or filter_code != 0:
+            if filter_code != 0:
                 _terminate_process(clipboard)
+                _terminate_process(bw_process)
                 label = "code" if field in {"totp", "cardCode"} else field
                 raise PublicError(f"Couldn't copy the {label}")
+            _reap_in_background(bw_process)
             clipboard_status = clipboard.poll()
             if clipboard_status not in {None, 0}:
                 raise PublicError("The secure clipboard couldn't be opened")
@@ -1871,8 +1890,8 @@ def build_parser() -> argparse.ArgumentParser:
     request_parser.add_argument("--timeout", type=float, default=70.0)
     unlock_parser = subparsers.add_parser("unlock-stdin", help="Relay a native prompt over stdin")
     unlock_parser.add_argument("--timeout", type=float, default=55.0)
-    card_filter = subparsers.add_parser("extract-card-field", help=argparse.SUPPRESS)
-    card_filter.add_argument("field", choices=sorted(CARD_COPY_FIELDS))
+    copy_filter = subparsers.add_parser("extract-copy-field", help=argparse.SUPPRESS)
+    copy_filter.add_argument("field", choices=sorted(COPY_FIELDS))
     interactive = argparse.ArgumentParser(add_help=False)
     interactive.add_argument("--bw-command", default="bw")
     interactive.add_argument("--pinentry-command", default="auto")
@@ -1896,8 +1915,8 @@ def main() -> int:
         return serve()
     if args.mode == "unlock-stdin":
         return unlock_stdin(args)
-    if args.mode == "extract-card-field":
-        return extract_card_field(args)
+    if args.mode == "extract-copy-field":
+        return extract_copy_field(args)
     if args.mode == "request":
         try:
             # Quickshell keeps the Process stdin pipe open for the process

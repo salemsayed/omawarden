@@ -180,8 +180,9 @@ and `screenLockState`. There is no `copy` over IPC, on purpose.
   through its environment, never its arguments.
 - The helper listens on a user-only Unix socket in a private runtime
   directory and checks every peer's UID.
-- Copies pipe `bw get` straight into `wl-copy --sensitive`; the clipboard
-  is cleared at the deadline, on a new copy, and on lock.
+- Copies pipe `bw get` through a short-lived filter into
+  `wl-copy --sensitive`, never through the helper or the shell; the
+  clipboard is cleared at the deadline, on a new copy, and on lock.
 - Only `http` and `https` sites from your own vault entries can be opened.
 - The index is memory-only and wiped on lock, sign-out and exit.
 - Unlocking only starts while Omarchy reports the screen as unlocked, read

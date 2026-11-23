@@ -1,5 +1,28 @@
 # Changelog
 
+## 1.2.1 - 2026-11-23
+
+Copying is three times faster. Measured on the same 911-item test vault and
+Bitwarden CLI (2026.2.0) as 1.2.0, median of 36 copies through the real panel
+service, against 1.2.0:
+
+- A password, username, one-time code or card field lands on the clipboard
+  about 1.0 second after Enter, down from 3.0. `bw get` has the value ready
+  after about a second but keeps its process alive for almost two more while
+  internal caches expire, and the copy used to wait for it to exit. Every copy
+  now pipes `bw get --response` through a short-lived filter that hands the
+  value to `wl-copy` and exits as soon as the CLI's JSON is complete; the CLI
+  exits in the background. Login fields now use the same filter cards already
+  used, so the value still never passes through the helper or the panel.
+- Copy, lock, sync and the other panel actions go straight to the helper's
+  socket instead of starting a helper process each time, saving about 70 ms,
+  and fall back to the process if the socket can't be reached.
+- Fixed a Quickshell crash, present since 1.2.0, when a search reached the
+  helper while it was shutting down (for example during an update): the
+  helper closed the connection unanswered and the panel tore the socket down
+  inside its own error handler. The panel now retries through a helper
+  process once that handler has returned.
+
 ## 1.2.0 - 2026-11-23
 
 Measured on a 911-item test vault with the same Bitwarden CLI (2026.2.0),

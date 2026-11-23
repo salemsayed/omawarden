@@ -95,17 +95,18 @@ elif command == "list":
     reply({"object": "list", "data": items}, json.dumps(items) + "\n")
 elif command == "get":
     if args[1] == "item" and args[2] == "card-1":
-        print(json.dumps({
+        card = {
             "id": "card-1", "name": "Travel Card", "type": 3,
             "card": {
                 "brand": "Visa", "cardholderName": "Example Person",
                 "number": "4111111111111111", "code": "999",
                 "expMonth": "7", "expYear": "2030"
             }
-        }))
+        }
+        reply(card, json.dumps(card) + "\n")
     else:
         values = {"password": "COPIED_PASSWORD", "username": "COPIED_USERNAME", "totp": "123456"}
-        print(values[args[1]])
+        reply({"object": "string", "data": values[args[1]]}, values[args[1]])
 elif command == "unlock":
     if os.environ.get("FAKE_BW_SKIP_PASSWORD_FILE"):
         raise SystemExit(1)
@@ -318,7 +319,10 @@ class AgentTests(unittest.TestCase):
 
     def test_secret_is_piped_to_sensitive_timed_clipboard(self) -> None:
         self.agent.session = "session"
-        response = self.agent.copy("item-1", "password")
+        began = time.monotonic()
+        with mock.patch.dict(os.environ, {"FAKE_BW_LINGER": "5"}):
+            response = self.agent.copy("item-1", "password")
+        self.assertLess(time.monotonic() - began, 3)
         self.assertNotIn("COPIED_PASSWORD", json.dumps(response))
         deadline = time.monotonic() + 2
         while not self.clipboard.exists() and time.monotonic() < deadline:

@@ -97,12 +97,13 @@ same time.
 
 ### Copy
 
-For login fields, `bw get <field>` is piped straight into
-`wl-copy --sensitive`; neither Python nor QML sees the value. The CLI has no
-equivalent card-field command, so `bw get item` is piped through a short-lived
-filter process that emits only the requested card value into `wl-copy`. The
-full card object never enters QML, IPC responses or the long-lived agent and
-the filter exits immediately after the copy pipe is filled. The clipboard
+`bw get <field>` (or `bw get item` for card fields, which have no direct CLI
+command) is piped through a short-lived filter process into
+`wl-copy --sensitive`. The filter reads the CLI's `--response` JSON, emits only
+the requested value, closes the copy pipe and exits as soon as that JSON is
+complete, so the copy finishes without waiting for the CLI to exit. The value
+and the full card object never enter QML, IPC responses or the long-lived
+agent. The clipboard
 owner is terminated at the configured deadline, on the next copy, on lock and
 on sign-out. `--paste-once` is not used because Omarchy's clipboard-history
 watcher would consume the single paste while checking the sensitivity flag.

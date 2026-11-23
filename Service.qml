@@ -81,6 +81,7 @@ Item {
   property bool _searchQueued: false
   property bool _searchCancelled: false
   property string _searchTransport: ""
+  property string _actionTransport: ""
   property bool _screenLockPending: false
   property bool _syncAfterUnlock: false
   property bool _unlockAfterStatus: false
@@ -153,6 +154,10 @@ Item {
     searchProcess.running = true
   }
 
+  function searchSocketLost() {
+    if (_searchTransport === "socket") searchViaHelper()
+  }
+
   function finishSearch() {
     var cancelled = _searchCancelled
     searchSocketDeadline.stop()
@@ -191,8 +196,36 @@ Item {
             : (action === "copy" ? "Copying…" : "Working…"))))
     actionMessageTimer.stop()
     actionBusy = true
-    actionProcess.running = true
+    if (agentSocket !== "") {
+      _actionTransport = "socket"
+      actionSocketDeadline.restart()
+      actionSocket.connected = true
+    } else runActionViaHelper()
     return true
+  }
+
+  function runActionViaHelper() {
+    _actionTransport = "helper"
+    actionSocketDeadline.stop()
+    actionSocket.connected = false
+    actionProcess.running = true
+  }
+
+  function actionSocketLost() {
+    if (_actionTransport === "socket") runActionViaHelper()
+  }
+
+  function finishAction() {
+    _actionTransport = ""
+    actionSocketDeadline.stop()
+    actionBusy = false
+    if (_screenLockPending) {
+      _syncAfterUnlock = false
+      screenLockRetry.restart()
+    } else if (_syncAfterUnlock) {
+      _syncAfterUnlock = false
+      sync()
+    }
   }
 
   function beginUnlock() {
@@ -477,15 +510,15 @@ Item {
       if (connected) {
         write(root._searchInput + "\n")
         flush()
-      } else root.searchViaHelper()
+      } else Qt.callLater(root.searchSocketLost)
     }
-    onError: if (root._searchTransport === "socket") root.searchViaHelper()
+    onError: if (root._searchTransport === "socket") Qt.callLater(root.searchSocketLost)
   }
 
   Timer {
     id: searchSocketDeadline
     interval: 55000
-    onTriggered: if (root._searchTransport === "socket") root.searchViaHelper()
+    onTriggered: root.searchSocketLost()
   }
 
   Process {
@@ -500,16 +533,35 @@ Item {
       onStreamFinished: root.applyAction(text)
     }
     stderr: StdioCollector { waitForEnd: true }
-    onExited: {
-      root.actionBusy = false
-      if (root._screenLockPending) {
-        root._syncAfterUnlock = false
-        screenLockRetry.restart()
-      } else if (root._syncAfterUnlock) {
-        root._syncAfterUnlock = false
-        root.sync()
+    onExited: root.finishAction()
+  }
+
+  Socket {
+    id: actionSocket
+    path: root.agentSocket
+    parser: SplitParser {
+      onRead: function(data) {
+        if (root._actionTransport !== "socket") return
+        root._actionTransport = "answered"
+        actionSocket.connected = false
+        root.applyAction(data)
+        root.finishAction()
       }
     }
+    onConnectionStateChanged: {
+      if (root._actionTransport !== "socket") return
+      if (connected) {
+        write(root._actionInput + "\n")
+        flush()
+      } else Qt.callLater(root.actionSocketLost)
+    }
+    onError: if (root._actionTransport === "socket") Qt.callLater(root.actionSocketLost)
+  }
+
+  Timer {
+    id: actionSocketDeadline
+    interval: 120000
+    onTriggered: root.actionSocketLost()
   }
 
   Process {

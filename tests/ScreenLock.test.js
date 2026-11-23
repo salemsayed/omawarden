@@ -41,6 +41,7 @@ function service() {
     _actionInput: "", actionStatus: "", lastError: "", statusText: "", lastCopyField: "",
     syncOnUnlock: true, unlockPrompt: "pinentry", nativeUnlockMessage: "prompt",
     actionProcess: { running: false }, searchProcess: { running: false },
+    agentSocket: "", _actionTransport: "", actionSocket: { connected: false }, actionSocketDeadline: timer(),
     screenLockRetry: timer(), actionMessageTimer: timer(), refreshTimer: timer(),
     requestObject: (action, extra) => JSON.stringify({ action, ...extra }),
     actionCompleted: () => {}, nativeUnlockRequested: () => {},
@@ -50,7 +51,7 @@ function service() {
   Object.defineProperty(c, "unlocked", { get: () => c.vaultStatus === "unlocked" })
   c.root = c
   vm.createContext(c)
-  vm.runInContext(methods("Service.qml", ["runAction", "handleScreenLock", "discardSearch", "applyAction", "nativeUnlockComplete", "nativeUnlockCancelled", "beginUnlock", "sync"]), c)
+  vm.runInContext(methods("Service.qml", ["runAction", "runActionViaHelper", "handleScreenLock", "discardSearch", "applyAction", "nativeUnlockComplete", "nativeUnlockCancelled", "beginUnlock", "sync"]), c)
   c.flush = () => { while (callbacks.length) callbacks.shift()() }
   return c
 }

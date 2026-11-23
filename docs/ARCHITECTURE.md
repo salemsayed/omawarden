@@ -29,10 +29,13 @@ setup steps, requirement rows, result grouping, action availability, and
 human-readable durations. The Node test suite exercises it directly.
 
 `Service.qml` serializes bounded requests and parses allowlisted responses.
-Status and actions run one helper process per request; separate status and
-action processes keep the bar responsive while preventing duplicate actions.
-Searches go straight to the agent's socket, whose path the status response
-reports, and fall back to a helper process if the socket can't be reached.
+Status runs one helper process per request. Searches and actions go straight
+to the agent's socket, whose path the status response reports, on separate
+connections so the bar stays responsive and one action runs at a time. Either
+falls back to a helper process if the socket can't be reached or the agent
+closes it without answering, as it does while shutting down; that fallback
+runs after the socket's own signal handler returns, because tearing the socket
+down inside it crashes Quickshell.
 Search input uses a 30 ms debounce, just above the usual key-repeat interval,
 and coalesces in-flight requests without presenting stale results. After a
 successful unlock it triggers the sync itself in the background.
@@ -57,9 +60,11 @@ mode starts or connects to a long-lived per-user agent; `unlock-stdin` does
 the same for one native-prompt password. The agent holds the session key,
 executes Bitwarden operations, projects allowlisted login and card metadata,
 ranks searches, tracks recently used item IDs, manages clipboard owner
-processes, and enforces the inactivity lock. Card copies pipe `bw get item`
-through a short-lived field filter because the CLI has no direct card-field
-command. After unlock, once the password and its FIFO are cleared, the agent
+processes, and enforces the inactivity lock. Copies pipe `bw get` through a
+short-lived field filter into `wl-copy`; the filter emits only the requested
+value once the CLI's JSON reply is complete, so a copy lands without waiting
+for the CLI to exit, and card fields come from `bw get item` because the CLI
+has no direct card-field command. After unlock, once the password and its FIFO are cleared, the agent
 builds an in-memory index from the local vault containing only the same
 allowlisted metadata returned to QML. Searches that arrive first wait for that
 one load rather than starting another. Sync rebuilds the index from the fresh
